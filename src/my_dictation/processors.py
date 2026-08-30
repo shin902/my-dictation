@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from difflib import SequenceMatcher
 from .http import json_request
 from .models import Change, StageResult
 
@@ -14,6 +15,38 @@ _CONTEXT = r"(?:年|月|日|時|分|秒|円|ドル|ユーロ|個|本|枚|人|件
 def _term_pattern(term: str) -> str:
     escaped = re.escape(term)
     return r"(?<![A-Za-z0-9_])" + escaped + r"(?![A-Za-z0-9_])" if term.isascii() else escaped
+
+
+def _ascii_anchors_preserved(source: str, candidate: str) -> bool:
+    """Require every source ASCII token to survive in order.
+
+    Substring matching permits spacing/casing normalization such as
+    ``JSON L`` -> ``JSONL`` and ``SQL Lite`` -> ``SQLite``, while preventing
+    deletion of opaque facts such as ``60NT`` or ``Excalidraw``.
+    """
+    lowered, position = candidate.lower(), 0
+    for anchor in re.findall(r"[A-Za-z0-9]+", source):
+        found = lowered.find(anchor.lower(), position)
+        if found < 0:
+            return False
+        position = found + 1
+    return True
+
+
+def _content_retention(source: str, candidate: str) -> float:
+    def content(value: str) -> str:
+        return "".join(c for c in value if not unicodedata.category(c).startswith(("P", "Z")))
+
+    original, edited = content(source), content(candidate)
+    if not original:
+        return 1.0
+    matched = sum(block.size for block in SequenceMatcher(None, original, edited).get_matching_blocks())
+    return matched / len(original)
+
+
+def _speaker_voice_preserved(source: str, candidate: str) -> bool:
+    marker = re.compile(r"俺|僕|私|わたし|あたし|自分")
+    return marker.findall(source) == marker.findall(candidate)
 
 
 def _protected_term_sequence(text: str, terms: object) -> list[str]:
@@ -126,8 +159,13 @@ class OpenAIProofreader:
     def process(self, text: str, protected: list[str]) -> StageResult:
         if not self.api_key or not self.model:
             return StageResult("llm", "openai-compatible", text, text, accepted=False, error="LLM is not configured")
-        prompt = ("入力の意味・情報・文体を変えず、フィラー、明白な重複/言い直し/誤認識、最小限の句読点だけを修正してください。"
-                  "要約、情報追加、不要な言い換えは禁止です。protected_termsは一字も変更・削除しないでください。"
+        prompt = ("これはリライトではなく、原文忠実性を最優先する局所校正です。変更しないことを既定にしてください。\n"
+                  "【絶対禁止】情報の削除・追加、要約、意訳、語順変更、文の統合、段落の再構成、一人称・口調・敬語・文体の変更。"
+                  "不明瞭または確信できない箇所は、誤っていても原文をそのまま残してください。\n"
+                  "【許可】句読点の追加、明白なフィラー/直後の完全重複の削除、文脈上ほぼ一意なASR誤認識の局所置換だけ。"
+                  "数字、英数字、固有名詞、単位、否定、条件、程度、例示は一文字も落とさないでください。"
+                  "『俺』を『私』にする等の整文は禁止です。長文でも短縮せず、全情報を同じ順序で保持してください。\n"
+                  "protected_termsは出現回数と順序を含め一字も変更・削除しないでください。"
                   "JSONのみを返してください: {\"text\": string, \"changes\": [{\"before\": string, \"after\": string, \"rule\": string}]}\n"
                   f"protected_terms={json.dumps(protected, ensure_ascii=False)}\ninput={json.dumps(text, ensure_ascii=False)}")
         try:
@@ -143,8 +181,17 @@ class OpenAIProofreader:
             # Exact sequence comparison enforces occurrence order and multiplicity. The
             # shared matcher also applies lexical boundaries to ASCII protected terms.
             actual = _protected_term_sequence(output, protected)
-            accepted = actual == protected
-            reason = None if accepted else "protected term occurrence sequence or span was changed"
+            violations: list[str] = []
+            if actual != protected:
+                violations.append("protected term occurrence sequence or span was changed")
+            if not _ascii_anchors_preserved(text, output):
+                violations.append("an ASCII or numeric source token was removed or reordered")
+            if not _speaker_voice_preserved(text, output):
+                violations.append("first-person voice was changed")
+            if _content_retention(text, output) < 0.9:
+                violations.append("too much source content was removed or rewritten")
+            accepted = not violations
+            reason = None if accepted else "; ".join(violations)
             return StageResult("llm", "openai-compatible", text, output if accepted else text, changes, model=self.model, accepted=accepted,
                                error=reason, candidate_output=output, rejected_output=None if accepted else output, rejection_reason=reason)
         except Exception as exc:

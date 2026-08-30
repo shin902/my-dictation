@@ -55,7 +55,12 @@ class ExternalApiContractTests(unittest.TestCase):
         result = OpenAIProofreader("http://mock/v1/", "key", "model", 3, 0).process("修正", [])
         self.assertTrue(result.accepted); self.assertEqual(result.output, "修正。")
         self.assertEqual(request.call_args.args[0], "http://mock/v1/chat/completions")
-        self.assertEqual(request.call_args.args[1]["model"], "model")
+        payload = request.call_args.args[1]
+        self.assertEqual(payload["model"], "model")
+        prompt = payload["messages"][1]["content"]
+        self.assertIn("情報の削除・追加", prompt)
+        self.assertIn("一人称・口調・敬語・文体の変更", prompt)
+        self.assertIn("不明瞭または確信できない箇所", prompt)
 
     @patch("my_dictation.processors.json_request")
     def test_llm_malformed_json_and_empty_choices_fall_back(self, request):

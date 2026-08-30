@@ -68,6 +68,30 @@ class ProcessorTests(unittest.TestCase):
         self.assertFalse(result.accepted)
         self.assertEqual(result.output, "Python Kubernetes")
 
+    @patch("my_dictation.processors.json_request")
+    def test_llm_rejects_information_or_voice_loss(self, request):
+        proofreader = OpenAIProofreader("http://mock", "key", "model", 1, 0)
+        cases = [
+            ("60NTで解放する", "解放する", "ASCII"),
+            ("Excalidrawを導入する", "導入する", "ASCII"),
+            ("俺が実行する", "私が実行する", "first-person"),
+            ("これは長い入力で重要な条件と具体例を全部残す必要があります", "重要な条件を残します", "too much"),
+        ]
+        for source, candidate, expected_reason in cases:
+            request.return_value = {"choices": [{"message": {"content": json.dumps({"text": candidate, "changes": []})}}]}
+            result = proofreader.process(source, [])
+            self.assertFalse(result.accepted, source)
+            self.assertEqual(result.output, source)
+            self.assertEqual(result.rejected_output, candidate)
+            self.assertIn(expected_reason, result.rejection_reason)
+
+    @patch("my_dictation.processors.json_request")
+    def test_llm_allows_punctuation_and_ascii_spacing_normalization(self, request):
+        request.return_value = {"choices": [{"message": {"content": json.dumps({"text": "JSONLを使う。", "changes": []})}}]}
+        result = OpenAIProofreader("http://mock", "key", "model", 1, 0).process("JSON Lを使う", [])
+        self.assertTrue(result.accepted)
+        self.assertEqual(result.output, "JSONLを使う。")
+
     @patch("my_dictation.processors.json_request", side_effect=TimeoutError("timeout"))
     def test_llm_api_failure_falls_back(self, request):
         result = OpenAIProofreader("http://mock", "key", "model", 1, 0).process("安全", [])
