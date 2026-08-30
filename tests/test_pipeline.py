@@ -24,11 +24,12 @@ class ProcessorTests(unittest.TestCase):
         self.assertEqual(result.output, "2024-3-5 12:30 一石二鳥")
         self.assertTrue(result.changes)
 
-    def test_terminology_only_alias(self):
+    def test_terminology_kana_fuzzy_all_occurrences_and_non_target(self):
         processor = MondegreenTerminology({"Kubernetes": ["クバネティス"]})
-        result = processor.process("クバネティスを使う 普通の文章")
-        self.assertEqual(result.output, "Kubernetesを使う 普通の文章")
-        self.assertEqual(result.protected_terms, ["Kubernetes"])
+        result = processor.process("くばねてぃすとクバネテスを使う 普通の文章")
+        self.assertEqual(result.output, "KubernetesとKubernetesを使う 普通の文章")
+        self.assertEqual(result.protected_terms, ["Kubernetes", "Kubernetes"])
+        self.assertEqual(len(result.changes), 2)
         self.assertEqual(processor.process("普通の文章").output, "普通の文章")
 
     @patch("my_dictation.processors.json_request")
@@ -36,6 +37,17 @@ class ProcessorTests(unittest.TestCase):
         request.return_value = {"choices": [{"message": {"content": '{"text":"別物を使う","changes":[]}'}}]}
         result = OpenAIProofreader("http://mock", "key", "model", 1, 0).process("Kubernetesを使う", ["Kubernetes"])
         self.assertFalse(result.accepted); self.assertEqual(result.output, "Kubernetesを使う")
+        self.assertEqual(result.rejected_output, "別物を使う"); self.assertTrue(result.rejection_reason)
+
+    @patch("my_dictation.processors.json_request")
+    def test_llm_protection_checks_occurrence_count_and_not_substrings(self, request):
+        proofreader = OpenAIProofreader("http://mock", "key", "model", 1, 0)
+        request.return_value = {"choices": [{"message": {"content": '{"text":"Kubernetes","changes":[]}'}}]}
+        duplicate = proofreader.process("Kubernetes Kubernetes", ["Kubernetes", "Kubernetes"])
+        self.assertFalse(duplicate.accepted)
+        request.return_value = {"choices": [{"message": {"content": '{"text":"Kubernetes","changes":[]}'}}]}
+        substring = proofreader.process("Kube", ["Kube"])
+        self.assertFalse(substring.accepted)
 
     @patch("my_dictation.processors.json_request", side_effect=TimeoutError("timeout"))
     def test_llm_api_failure_falls_back(self, request):

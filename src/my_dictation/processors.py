@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
-from difflib import SequenceMatcher
+from collections import Counter
 
 from .http import json_request
 from .models import Change, StageResult
@@ -11,6 +11,11 @@ from .models import Change, StageResult
 _KANJI = {"〇": 0, "零": 0, "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
 _UNITS = {"十": 10, "百": 100, "千": 1000, "万": 10000}
 _CONTEXT = r"(?:年|月|日|時|分|秒|円|ドル|ユーロ|個|本|枚|人|件|回|度|％|%|キロ(?:グラム|メートル)?|グラム|センチ(?:メートル)?|ミリ(?:メートル)?|メートル)"
+
+
+def _term_pattern(term: str) -> str:
+    escaped = re.escape(term)
+    return r"(?<![A-Za-z0-9_])" + escaped + r"(?![A-Za-z0-9_])" if term.isascii() else escaped
 
 
 def _number(text: str) -> int:
@@ -45,30 +50,65 @@ class LimitedJapaneseItn:
 
 
 class MondegreenTerminology:
-    """Conservative local terminology connector using explicit pronunciation aliases."""
-    def __init__(self, terms: dict[str, list[str]], threshold: float = .94):
+    """Conservative local terminology correction over kana-normalized local spans."""
+    def __init__(self, terms: dict[str, list[str]], threshold: float = .8):
         self.terms, self.threshold = terms, threshold
 
     @staticmethod
     def _phonetic(value: str) -> str:
-        return unicodedata.normalize("NFKC", value).lower().replace(" ", "").replace("・", "")
+        value = unicodedata.normalize("NFKC", value).lower().replace(" ", "").replace("・", "")
+        return "".join(chr(ord(c) - 0x60) if "ァ" <= c <= "ヶ" else c for c in value)
+
+    @staticmethod
+    def _distance(left: str, right: str) -> int:
+        row = list(range(len(right) + 1))
+        for i, a in enumerate(left, 1):
+            next_row = [i]
+            for j, b in enumerate(right, 1):
+                next_row.append(min(next_row[-1] + 1, row[j] + 1, row[j - 1] + (a != b)))
+            row = next_row
+        return row[-1]
+
+    def _matches(self, text: str, alias: str) -> list[tuple[int, int]]:
+        exact = list(re.finditer(re.escape(alias), text))
+        if exact:
+            return [(m.start(), m.end()) for m in exact]
+        target = self._phonetic(alias)
+        if len(target) < 4:
+            return []
+        matches: list[tuple[int, int]] = []
+        # Search only kana runs and alias-sized local spans, never whole arbitrary tokens.
+        for run in re.finditer(r"[ぁ-ゖァ-ヶー]+", text):
+            value = run.group()
+            for size in range(max(4, len(alias) - 1), len(alias) + 2):
+                for offset in range(0, len(value) - size + 1):
+                    candidate = value[offset:offset + size]
+                    phonetic = self._phonetic(candidate)
+                    similarity = 1 - self._distance(phonetic, target) / max(len(phonetic), len(target))
+                    if similarity >= self.threshold:
+                        matches.append((run.start() + offset, run.start() + offset + size))
+        # Prefer the strongest non-overlapping spans and preserve textual order.
+        selected: list[tuple[int, int]] = []
+        for span in sorted(matches, key=lambda s: (abs((s[1] - s[0]) - len(alias)), s[0])):
+            if not any(span[0] < end and start < span[1] for start, end in selected):
+                selected.append(span)
+        return sorted(selected)
 
     def process(self, text: str) -> StageResult:
-        output, changes, protected = text, [], []
+        output, changes = text, []
         for canonical, aliases in self.terms.items():
-            if canonical in output: protected.append(canonical); continue
             for alias in sorted(aliases, key=len, reverse=True):
-                # Exact aliases are preferred. Fuzzy matching is intentionally only over
-                # whitespace-delimited tokens to avoid rewriting arbitrary substrings.
-                candidate = alias if alias in output else None
-                if candidate is None:
-                    for token in re.findall(r"[^\s、。！？]+", output):
-                        if len(token) >= 4 and SequenceMatcher(None, self._phonetic(token), self._phonetic(alias)).ratio() >= self.threshold:
-                            candidate = token; break
-                if candidate:
-                    output = output.replace(candidate, canonical, 1)
-                    changes.append(Change(candidate, canonical, "mondegreen-alias")); protected.append(canonical); break
-        return StageResult("terminology", "mondegreen", text, output, changes, list(dict.fromkeys(protected)))
+                spans = self._matches(output, alias)
+                for start, end in reversed(spans):
+                    before = output[start:end]
+                    output = output[:start] + canonical + output[end:]
+                    changes.append(Change(before, canonical, "mondegreen-alias"))
+        # Keep one entry per occurrence: downstream validation must detect duplicate loss.
+        protected: list[str] = []
+        for canonical in sorted(self.terms, key=len, reverse=True):
+            protected.extend([canonical] * len(list(re.finditer(_term_pattern(canonical), output))))
+        changes.reverse()
+        return StageResult("terminology", "mondegreen", text, output, changes, protected)
 
 
 class OpenAIProofreader:
@@ -92,8 +132,17 @@ class OpenAIProofreader:
             body = json.loads(content); output = body["text"]
             if not isinstance(output, str): raise ValueError("text is not a string")
             changes = [Change(str(c["before"]), str(c["after"]), str(c.get("rule", "llm"))) for c in body.get("changes", [])]
-            accepted = all(term in output for term in protected)
+            expected = Counter(protected)
+            actual = Counter()
+            for term in sorted(expected, key=len, reverse=True):
+                # ASCII terms require lexical boundaries, preventing a protected "Kube"
+                # occurrence from being satisfied by the substring in "Kubernetes".
+                actual[term] = len(list(re.finditer(_term_pattern(term), output)))
+            accepted = actual == expected
+            reason = None if accepted else "protected term occurrence or span was changed or removed"
             return StageResult("llm", "openai-compatible", text, output if accepted else text, changes, model=self.model, accepted=accepted,
-                               error=None if accepted else "protected term was changed or removed")
+                               error=reason, candidate_output=output, rejected_output=None if accepted else output, rejection_reason=reason)
         except Exception as exc:
-            return StageResult("llm", "openai-compatible", text, text, model=self.model, accepted=False, error=str(exc))
+            reason = str(exc)
+            return StageResult("llm", "openai-compatible", text, text, model=self.model, accepted=False, error=reason,
+                               candidate_output="", rejected_output="", rejection_reason=reason)
