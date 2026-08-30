@@ -75,6 +75,22 @@ Groq ASR → ITN → Mondegreen用語補正 → LLM校正 → 出力
 
 音声は送信前に`data/spool/`へ一時コピーされます。ASRと履歴保存が成功すると削除され、失敗した場合だけ残ります。
 
+複数ファイルをまとめて処理する場合は、batch scriptを使えます。CLIが生成する途中のstdoutは破棄され、保存された各JSONの最終文章とLLM状態だけがJSON配列としてstdoutへ出ます。
+
+```sh
+scripts/transcribe-files.sh recording-1.ogg recording-2.ogg
+scripts/transcribe-files.sh --list audio-files.txt
+printf '%s\n' recording-1.ogg recording-2.ogg | scripts/transcribe-files.sh
+```
+
+APIのrate limitを避けるために間隔を空けることもできます。
+
+```sh
+scripts/transcribe-files.sh --delay 8 --list audio-files.txt
+```
+
+進捗とエラーはstderrへ出ます。個別の履歴JSONは従来どおり上書きせずに保存されます。
+
 ### 4. 失敗した音声を再試行する
 
 spool内の全音声を再試行します。
