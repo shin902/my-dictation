@@ -2,56 +2,151 @@
 
 Groqの1-best ASRを、限定的な日本語ITN、手動用語辞書（Mondegreen）、OpenAI互換LLMによる保守的校正へ通す、小さく監査可能なPython CLIです。各入力を1 JSONに保存します。
 
-## Requirements / install
+## 必要環境
 
-Python 3.11以上。
+- Python 3.11以上
+- 音声認識にはGroq API key
+- LLM校正には任意のOpenAI互換API（未設定でも動作可能）
+
+## 使い方
+
+### 1. セットアップ
 
 ```sh
-python -m venv .venv
+git clone https://github.com/shin902/my-dictation.git
+cd my-dictation
+python3 -m venv .venv
 . .venv/bin/activate
 pip install -e .
 cp config.example.toml config.toml
 ```
 
-APIキーは設定ファイルに書かず環境変数で渡してください。
+GroqのAPI keyを設定します。
 
 ```sh
-export GROQ_API_KEY=...
-export LLM_API_KEY=...       # LLM校正を使う場合のみ
-export LLM_MODEL=gpt-4o-mini # または config.toml の api.llm_model
+export GROQ_API_KEY='gsk_...'
 ```
 
-`LLM_API_KEY`またはmodelがない場合、LLM段階は安全に不採用となり、用語補正後の文を返します。設定ファイルは `--config` または `MY_DICTATION_CONFIG` で選べます。base URL、model、timeout、temperature、用語辞書の例は `config.example.toml` を参照してください。GroqとLLMはいずれもOpenAI互換HTTP endpointへ標準ライブラリだけで接続します。
-
-基本installは軽量な内蔵processorを使います。実プロジェクトのadapterを選ぶ場合だけ、必要なextraをinstallし、`[processors]` で明示的に切り替えます。
+LLM校正も使う場合は、OpenAI互換APIの接続情報を設定します。未設定でも、ASR・ITN・用語補正までは動作します。
 
 ```sh
-pip install -e '.[wetextprocessing]' # WeTextProcessing（Pyniniを含む）
-pip install -e '.[mondegreen]'       # NagaYu/mondegreen（G2P依存を含む）
-# または: pip install -e '.[external-processors]'
+export LLM_API_KEY='...'
+export LLM_MODEL='gpt-4o-mini'
+# OpenAI以外の互換serverを使う場合
+export LLM_BASE_URL='http://localhost:11434/v1'
 ```
 
-```toml
-[processors]
-itn = "wetextprocessing"       # default: "builtin"
-terminology = "mondegreen"     # default: "builtin"
-terminology_glossary = "config/glossary.csv"
+既定ではカレントディレクトリの`config.toml`を読みます。別の設定を使う場合は、各コマンドの前に`--config`を指定します。
+
+```sh
+my-dictation --config /path/to/config.toml process-text 'テストです'
 ```
 
-WeText adapterは `tn.japanese.normalizer.Normalizer` に対象カテゴリのspanだけを渡します。Mondegreen adapterは `load_glossary` と `ConstrainedCorrector(..., use_lm=false)` を使います。外部moduleのimport・実行に失敗した場合は安全に内蔵processorへfallbackし、base installの従来動作を維持します。backend名が不正、またはMondegreen選択時にglossary pathがない設定は起動時エラーになります。環境変数 `MY_DICTATION_ITN_BACKEND` / `MY_DICTATION_TERMINOLOGY_BACKEND` でもbackendを選択できます。
+### 2. まずテキストだけ試す
 
-## CLI
+ASRを使わず、ITN・用語補正・LLM校正だけを確認できます。
+
+```sh
+my-dictation process-text '二千二十四年三月五日にクバネティスを使います'
+```
+
+最終テキストはstdout、作成した履歴JSONのpathはstderrへ出ます。
+
+```text
+2024-3-5にKubernetesを使います。
+record: data/records/2026-08-31/123456-<uuid>.json
+```
+
+### 3. 音声ファイルを文字起こしする
 
 ```sh
 my-dictation transcribe recording.wav
-my-dictation retry                 # spool内の全件
-my-dictation retry '<id-fragment>' # 一致する音声だけ
-my-dictation process-text '三個のクバネティス'
 ```
 
-最終テキストだけがstdoutに出ます。履歴pathとエラーはstderrです。ASR前に音声を `data/spool` へatomicにコピーし、ASR成功かつ履歴のatomic保存完了後だけ削除します。失敗音声は `retry` まで残ります。音声を恒久保存する設計ではないため、成功時には削除されます。
+対応音声形式はGroq Speech-to-Text APIが受け付ける形式に従います。処理順は次の通りです。
 
-履歴は `data/records/YYYY-MM-DD/HHMMSS-<uuid>.json` に各段階の入出力、変更、保護語、採否を保存します。API keyと音声は保存しません。悪い結果の手動訂正は、ライブラリの `RecordStore.correct(Path(record), "修正文")` で同じJSONの `manual_correction` にatomicに記録できます。
+```text
+Groq ASR → ITN → Mondegreen用語補正 → LLM校正 → 出力
+```
+
+音声は送信前に`data/spool/`へ一時コピーされます。ASRと履歴保存が成功すると削除され、失敗した場合だけ残ります。
+
+### 4. 失敗した音声を再試行する
+
+spool内の全音声を再試行します。
+
+```sh
+my-dictation retry
+```
+
+ファイル名の一部を指定して、1件だけ再試行することもできます。
+
+```sh
+find data/spool -type f
+my-dictation retry 'ファイル名またはIDの一部'
+```
+
+再試行に成功した音声はspoolから削除されます。
+
+### 5. 用語辞書を設定する
+
+`config.toml`の`[terminology]`へ、正規表記と認識されやすい読みを追加します。
+
+```toml
+[terminology]
+"Kubernetes" = ["クバネティス", "クーベネティス"]
+"Groq" = ["グロック"]
+"ROCmFPX" = ["ロックムエフピーエックス"]
+```
+
+`config.toml`はGit管理対象外です。API keyは書かず、環境変数を使用してください。
+
+### 6. 履歴と手動修正
+
+履歴は1入力につき1ファイルです。
+
+```text
+data/records/YYYY-MM-DD/HHMMSS-<uuid>.json
+```
+
+JSONには`raw`、ITN・用語補正・LLM校正の各結果、最終`output`が入ります。結果が悪かった場合だけ、対象JSONの`manual_correction`へ修正文を手動で記入できます。
+
+```json
+{
+  "output": "機械が出した文章",
+  "manual_correction": "自分で直した文章"
+}
+```
+
+### 7. 実際のMondegreen / WeTextProcessingを使う（任意）
+
+基本インストールでは軽量な内蔵処理を使います。外部実装を使う場合だけ追加します。
+
+```sh
+pip install -e '.[external-processors]'
+```
+
+`config.toml`を変更します。
+
+```toml
+[processors]
+itn = "wetextprocessing"
+terminology = "mondegreen"
+terminology_glossary = "config/glossary.csv"
+```
+
+`glossary.csv`の形式はNagaYu/mondegreenの仕様に従います。外部processorが未導入または失敗した場合は、内蔵処理へfallbackします。環境変数`MY_DICTATION_ITN_BACKEND`と`MY_DICTATION_TERMINOLOGY_BACKEND`でも切り替えられます。
+
+### CLI一覧
+
+```sh
+my-dictation transcribe <audio-file>
+my-dictation retry [record-or-audio-id]
+my-dictation process-text <text>
+my-dictation --help
+```
+
+最終テキストだけがstdoutに出ます。履歴pathとエラーはstderrです。
 
 ## 処理上の制約
 
