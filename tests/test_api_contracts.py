@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from my_dictation.asr import GroqAsr
+from my_dictation.http import json_request
 from my_dictation.processors import OpenAIProofreader
 
 
@@ -40,6 +41,13 @@ class ExternalApiContractTests(unittest.TestCase):
             with patch("urllib.request.urlopen", side_effect=OSError("503")):
                 with self.assertRaisesRegex(RuntimeError, "Groq ASR failed: 503"):
                     GroqAsr("http://mock", "key", "model").transcribe(audio)
+
+    def test_json_request_identifies_the_client(self):
+        with patch("urllib.request.urlopen", return_value=Response({"ok": True})) as call:
+            self.assertEqual(json_request("http://mock", {"input": "text"}, "secret", 3), {"ok": True})
+        request = call.call_args.args[0]
+        self.assertEqual(request.headers["User-agent"], "my-dictation/0.1.0")
+        self.assertEqual(request.headers["Authorization"], "Bearer secret")
 
     @patch("my_dictation.processors.json_request")
     def test_llm_structured_response_contract(self, request):
