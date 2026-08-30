@@ -138,7 +138,19 @@ JSONには`raw`、ITN・用語補正・LLM校正の各結果、最終`output`が
 }
 ```
 
-### 7. 実際のMondegreen / WeTextProcessingを使う（任意）
+### 7. macOSでホットキー入力する
+
+Hammerspoonを使う最小クライアントでは、`Ctrl + Option + Space`を1回押すと録音を開始し、もう1回押すと録音を停止します。文字起こしに成功すると結果をクリップボードへ入れ、録音停止時と同じウインドウが選択されたままなら自動でペーストします。別のウインドウへ移動していた場合は誤入力を避けるため、クリップボードへのコピーだけを行います。
+
+HammerspoonからCLIを呼ぶ際は次のwrapperを使用します。wrapperはrepository直下へ移動して`.env`を読み込み、絶対pathの`config.toml`を使用します。
+
+```sh
+scripts/hotkey-transcribe.sh /path/to/recording.wav
+```
+
+録音には`ffmpeg`、グローバルホットキーにはHammerspoonが必要です。初回使用時はmacOSの設定でHammerspoonのマイク入力とアクセシビリティを許可してください。録音デバイスとホットキーはHammerspoon設定側で変更できます。
+
+### 8. 実際のMondegreen / WeTextProcessingを使う（任意）
 
 基本インストールでは軽量な内蔵処理を使います。外部実装を使う場合だけ追加します。
 
