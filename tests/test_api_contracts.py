@@ -61,6 +61,8 @@ class ExternalApiContractTests(unittest.TestCase):
         self.assertIn("情報の削除・追加", prompt)
         self.assertIn("一人称・口調・敬語・文体の変更", prompt)
         self.assertIn("不明瞭または確信できない箇所", prompt)
+        self.assertIn("JSON L→JSONL", prompt)
+        self.assertIn("Chrome→clone", prompt)
 
     @patch("my_dictation.processors.json_request")
     def test_llm_malformed_json_and_empty_choices_fall_back(self, request):

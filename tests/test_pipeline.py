@@ -86,11 +86,18 @@ class ProcessorTests(unittest.TestCase):
             self.assertIn(expected_reason, result.rejection_reason)
 
     @patch("my_dictation.processors.json_request")
-    def test_llm_allows_punctuation_and_ascii_spacing_normalization(self, request):
-        request.return_value = {"choices": [{"message": {"content": json.dumps({"text": "JSONLを使う。", "changes": []})}}]}
-        result = OpenAIProofreader("http://mock", "key", "model", 1, 0).process("JSON Lを使う", [])
-        self.assertTrue(result.accepted)
-        self.assertEqual(result.output, "JSONLを使う。")
+    def test_llm_allows_bounded_local_technical_corrections(self, request):
+        proofreader = OpenAIProofreader("http://mock", "key", "model", 1, 0)
+        cases = [
+            ("JSON Lを使う", "JSONLを使う。"),
+            ("SQL Liteに保存する", "SQLiteに保存する。"),
+            ("リポジトリをChromeできた", "リポジトリをcloneできた。"),
+        ]
+        for source, candidate in cases:
+            request.return_value = {"choices": [{"message": {"content": json.dumps({"text": candidate, "changes": []})}}]}
+            result = proofreader.process(source, [])
+            self.assertTrue(result.accepted, source)
+            self.assertEqual(result.output, candidate)
 
     @patch("my_dictation.processors.json_request", side_effect=TimeoutError("timeout"))
     def test_llm_api_failure_falls_back(self, request):

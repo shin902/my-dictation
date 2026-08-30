@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
-from difflib import SequenceMatcher
 from .http import json_request
 from .models import Change, StageResult
 
@@ -18,14 +17,16 @@ def _term_pattern(term: str) -> str:
 
 
 def _ascii_anchors_preserved(source: str, candidate: str) -> bool:
-    """Require every source ASCII token to survive in order.
+    """Keep high-risk ASCII facts while allowing small local corrections.
 
-    Substring matching permits spacing/casing normalization such as
-    ``JSON L`` -> ``JSONL`` and ``SQL Lite`` -> ``SQLite``, while preventing
-    deletion of opaque facts such as ``60NT`` or ``Excalidraw``.
+    Tokens containing numbers and long identifiers remain immutable. Short
+    alphabetic tokens may be corrected locally (for example ``Chrome`` ->
+    ``clone``), while spacing/casing normalization such as ``JSON L`` ->
+    ``JSONL`` remains possible.
     """
+    anchors = [token for token in re.findall(r"[A-Za-z0-9]+", source) if any(c.isdigit() for c in token) or len(token) >= 8]
     lowered, position = candidate.lower(), 0
-    for anchor in re.findall(r"[A-Za-z0-9]+", source):
+    for anchor in anchors:
         found = lowered.find(anchor.lower(), position)
         if found < 0:
             return False
@@ -33,15 +34,12 @@ def _ascii_anchors_preserved(source: str, candidate: str) -> bool:
     return True
 
 
-def _content_retention(source: str, candidate: str) -> float:
+def _content_length_ratio(source: str, candidate: str) -> float:
     def content(value: str) -> str:
         return "".join(c for c in value if not unicodedata.category(c).startswith(("P", "Z")))
 
     original, edited = content(source), content(candidate)
-    if not original:
-        return 1.0
-    matched = sum(block.size for block in SequenceMatcher(None, original, edited).get_matching_blocks())
-    return matched / len(original)
+    return len(edited) / len(original) if original else 1.0
 
 
 def _speaker_voice_preserved(source: str, candidate: str) -> bool:
@@ -162,8 +160,9 @@ class OpenAIProofreader:
         prompt = ("これはリライトではなく、原文忠実性を最優先する局所校正です。変更しないことを既定にしてください。\n"
                   "【絶対禁止】情報の削除・追加、要約、意訳、語順変更、文の統合、段落の再構成、一人称・口調・敬語・文体の変更。"
                   "不明瞭または確信できない箇所は、誤っていても原文をそのまま残してください。\n"
-                  "【許可】句読点の追加、明白なフィラー/直後の完全重複の削除、文脈上ほぼ一意なASR誤認識の局所置換だけ。"
-                  "数字、英数字、固有名詞、単位、否定、条件、程度、例示は一文字も落とさないでください。"
+                  "【許可】句読点の追加、明白なフィラー/直後の完全重複の削除、文脈上かなり確度が高いASR誤認識の局所置換。"
+                  "特に、分割された著名な技術用語（JSON L→JSONL、SQL Lite→SQLite）や、文脈上明白な音声認識由来の英単語（Chrome→clone等）は積極的に直してください。"
+                  "ただし推測だけで広げず、修正範囲は該当語句だけに限定してください。数字、単位、長い識別子、固有情報、否定、条件、程度、例示は一文字も落とさないでください。"
                   "『俺』を『私』にする等の整文は禁止です。長文でも短縮せず、全情報を同じ順序で保持してください。\n"
                   "protected_termsは出現回数と順序を含め一字も変更・削除しないでください。"
                   "JSONのみを返してください: {\"text\": string, \"changes\": [{\"before\": string, \"after\": string, \"rule\": string}]}\n"
@@ -188,8 +187,9 @@ class OpenAIProofreader:
                 violations.append("an ASCII or numeric source token was removed or reordered")
             if not _speaker_voice_preserved(text, output):
                 violations.append("first-person voice was changed")
-            if _content_retention(text, output) < 0.9:
-                violations.append("too much source content was removed or rewritten")
+            length_ratio = _content_length_ratio(text, output)
+            if not 0.9 <= length_ratio <= 1.1:
+                violations.append("too much source content was removed or added")
             accepted = not violations
             reason = None if accepted else "; ".join(violations)
             return StageResult("llm", "openai-compatible", text, output if accepted else text, changes, model=self.model, accepted=accepted,
