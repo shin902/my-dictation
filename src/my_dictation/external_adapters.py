@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import Change, StageResult
-from .processors import LimitedJapaneseItn, MondegreenTerminology, _CONTEXT, _term_pattern
+from .processors import LimitedJapaneseItn, MondegreenTerminology, _CONTEXT, _protected_term_sequence
 
 
 class WeTextProcessingJapaneseItn:
@@ -75,9 +75,7 @@ class NagaYuMondegreenTerminology:
             for opcode, i1, i2, j1, j2 in SequenceMatcher(None, text, output).get_opcodes():
                 if opcode != "equal":
                     changes.append(Change(text[i1:i2], output[j1:j2], "mondegreen-constrained"))
-            protected: list[str] = []
-            for canonical in sorted(self.terms, key=len, reverse=True):
-                protected.extend([canonical] * len(list(re.finditer(_term_pattern(canonical), output))))
+            protected = _protected_term_sequence(output, self.terms)
             return StageResult("terminology", "mondegreen-constrained", text, output, changes, protected)
         except Exception:
             return self.fallback.process(text)

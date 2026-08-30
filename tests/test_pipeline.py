@@ -24,6 +24,11 @@ class ProcessorTests(unittest.TestCase):
         self.assertEqual(result.output, "2024-3-5 12:30 一石二鳥")
         self.assertTrue(result.changes)
 
+    def test_builtin_itn_only_normalizes_approved_spans_not_phone_or_address(self):
+        source = "電話は０９０-１２３４-５６７８、住所は東京都新宿区３丁目、日付は２０２４年三月五日"
+        result = LimitedJapaneseItn().process(source)
+        self.assertEqual(result.output, "電話は０９０-１２３４-５６７８、住所は東京都新宿区３丁目、日付は2024-3-5")
+
     def test_terminology_kana_fuzzy_all_occurrences_and_non_target(self):
         processor = MondegreenTerminology({"Kubernetes": ["クバネティス"]})
         result = processor.process("くばねてぃすとクバネテスを使う 普通の文章")
@@ -31,6 +36,11 @@ class ProcessorTests(unittest.TestCase):
         self.assertEqual(result.protected_terms, ["Kubernetes", "Kubernetes"])
         self.assertEqual(len(result.changes), 2)
         self.assertEqual(processor.process("普通の文章").output, "普通の文章")
+
+    def test_builtin_terminology_protected_terms_follow_source_order(self):
+        processor = MondegreenTerminology({"Kubernetes": ["クバネティス"], "Python": ["パイソン"]})
+        result = processor.process("パイソン、クバネティス、パイソン")
+        self.assertEqual(result.protected_terms, ["Python", "Kubernetes", "Python"])
 
     @patch("my_dictation.processors.json_request")
     def test_llm_protected_term_violation_falls_back(self, request):
@@ -48,6 +58,15 @@ class ProcessorTests(unittest.TestCase):
         request.return_value = {"choices": [{"message": {"content": '{"text":"Kubernetes","changes":[]}'}}]}
         substring = proofreader.process("Kube", ["Kube"])
         self.assertFalse(substring.accepted)
+
+    @patch("my_dictation.processors.json_request")
+    def test_llm_rejects_protected_term_order_change(self, request):
+        request.return_value = {"choices": [{"message": {"content": '{"text":"Kubernetes Python","changes":[]}'}}]}
+        result = OpenAIProofreader("http://mock", "key", "model", 1, 0).process(
+            "Python Kubernetes", ["Python", "Kubernetes"]
+        )
+        self.assertFalse(result.accepted)
+        self.assertEqual(result.output, "Python Kubernetes")
 
     @patch("my_dictation.processors.json_request", side_effect=TimeoutError("timeout"))
     def test_llm_api_failure_falls_back(self, request):

@@ -30,6 +30,14 @@ class ExternalProcessorAdapterTests(unittest.TestCase):
         self.assertEqual(result.output, "3個")
         self.assertEqual(result.processor, "limited-japanese-itn")
 
+    def test_wetext_failure_fallback_preserves_phone_and_address(self):
+        source = "電話０９０-１２３４-５６７８ 住所東京都新宿区３丁目 日付２０２４年三月五日"
+        module = types.SimpleNamespace(Normalizer=lambda: (_ for _ in ()).throw(RuntimeError("failed")))
+        with patch("my_dictation.external_adapters.importlib.import_module", return_value=module):
+            result = WeTextProcessingJapaneseItn().process(source)
+        self.assertEqual(result.output, "電話０９０-１２３４-５６７８ 住所東京都新宿区３丁目 日付2024-3-5")
+        self.assertEqual(result.processor, "limited-japanese-itn")
+
     def test_mondegreen_contract_disables_lm_and_preserves_terms(self):
         calls = {}
 
@@ -54,6 +62,19 @@ class ExternalProcessorAdapterTests(unittest.TestCase):
         self.assertEqual(result.output, "Kubernetesを使う")
         self.assertEqual(result.protected_terms, ["Kubernetes"])
         self.assertTrue(result.changes)
+
+    def test_external_mondegreen_protected_terms_follow_source_order(self):
+        class ConstrainedCorrector:
+            def __init__(self, **kwargs): pass
+            def correct(self, text): return "Python Kubernetes Python"
+
+        module = types.SimpleNamespace(load_glossary=lambda path: {}, ConstrainedCorrector=ConstrainedCorrector)
+        adapter = NagaYuMondegreenTerminology(
+            Path("terms.csv"), {"Kubernetes": ["クバネティス"], "Python": ["パイソン"]}
+        )
+        with patch("my_dictation.external_adapters.importlib.import_module", return_value=module):
+            result = adapter.process("パイソン クバネティス パイソン")
+        self.assertEqual(result.protected_terms, ["Python", "Kubernetes", "Python"])
 
     def test_mondegreen_failure_safely_uses_builtin(self):
         adapter = NagaYuMondegreenTerminology(Path("missing.csv"), {"Kubernetes": ["クバネティス"]})

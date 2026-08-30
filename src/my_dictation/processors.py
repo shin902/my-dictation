@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
-from collections import Counter
-
 from .http import json_request
 from .models import Change, StageResult
 
@@ -16,6 +14,14 @@ _CONTEXT = r"(?:年|月|日|時|分|秒|円|ドル|ユーロ|個|本|枚|人|件
 def _term_pattern(term: str) -> str:
     escaped = re.escape(term)
     return r"(?<![A-Za-z0-9_])" + escaped + r"(?![A-Za-z0-9_])" if term.isascii() else escaped
+
+
+def _protected_term_sequence(text: str, terms: object) -> list[str]:
+    """Return protected occurrences in source order, with ASCII lexical boundaries."""
+    matches: list[tuple[int, int, str]] = []
+    for term in dict.fromkeys(terms):
+        matches.extend((match.start(), match.end(), term) for match in re.finditer(_term_pattern(term), text))
+    return [term for _, _, term in sorted(matches, key=lambda item: (item[0], -(item[1] - item[0])))]
 
 
 def _number(text: str) -> int:
@@ -32,14 +38,18 @@ class LimitedJapaneseItn:
     """Small deterministic ITN; only contextual numerals are converted."""
     def process(self, text: str) -> StageResult:
         changes: list[Change] = []
-        numeric_translation = str.maketrans("０１２３４５６７８９％", "0123456789%")
-        normalized = text.translate(numeric_translation)
-        if normalized != text: changes.append(Change(text, normalized, "fullwidth-numeric"))
-        pattern = re.compile(rf"[〇零一二三四五六七八九十百千万]+(?={_CONTEXT})")
+        translation = str.maketrans("０１２３４５６７８９", "0123456789")
+        pattern = re.compile(rf"([〇零一二三四五六七八九十百千万０-９0-9]+)(?={_CONTEXT})")
+
         def replace(match: re.Match[str]) -> str:
-            after = str(_number(match.group()))
-            changes.append(Change(match.group(), after, "contextual-japanese-number")); return after
-        output = pattern.sub(replace, normalized)
+            before = match.group()
+            translated = before.translate(translation)
+            after = str(_number(translated)) if any(char in _KANJI or char in _UNITS for char in translated) else translated
+            if after != before:
+                changes.append(Change(before, after, "approved-context-number"))
+            return after
+
+        output = pattern.sub(replace, text)
         # Canonical separators are limited to fully numeric date/time expressions.
         rules = [(r"(\d{4})年(\d{1,2})月(\d{1,2})日", r"\1-\2-\3", "date"),
                  (r"(\d{1,2})時(\d{1,2})分", r"\1:\2", "time")]
@@ -104,9 +114,7 @@ class MondegreenTerminology:
                     output = output[:start] + canonical + output[end:]
                     changes.append(Change(before, canonical, "mondegreen-alias"))
         # Keep one entry per occurrence: downstream validation must detect duplicate loss.
-        protected: list[str] = []
-        for canonical in sorted(self.terms, key=len, reverse=True):
-            protected.extend([canonical] * len(list(re.finditer(_term_pattern(canonical), output))))
+        protected = _protected_term_sequence(output, self.terms)
         changes.reverse()
         return StageResult("terminology", "mondegreen", text, output, changes, protected)
 
@@ -132,14 +140,11 @@ class OpenAIProofreader:
             body = json.loads(content); output = body["text"]
             if not isinstance(output, str): raise ValueError("text is not a string")
             changes = [Change(str(c["before"]), str(c["after"]), str(c.get("rule", "llm"))) for c in body.get("changes", [])]
-            expected = Counter(protected)
-            actual = Counter()
-            for term in sorted(expected, key=len, reverse=True):
-                # ASCII terms require lexical boundaries, preventing a protected "Kube"
-                # occurrence from being satisfied by the substring in "Kubernetes".
-                actual[term] = len(list(re.finditer(_term_pattern(term), output)))
-            accepted = actual == expected
-            reason = None if accepted else "protected term occurrence or span was changed or removed"
+            # Exact sequence comparison enforces occurrence order and multiplicity. The
+            # shared matcher also applies lexical boundaries to ASCII protected terms.
+            actual = _protected_term_sequence(output, protected)
+            accepted = actual == protected
+            reason = None if accepted else "protected term occurrence sequence or span was changed"
             return StageResult("llm", "openai-compatible", text, output if accepted else text, changes, model=self.model, accepted=accepted,
                                error=reason, candidate_output=output, rejected_output=None if accepted else output, rejection_reason=reason)
         except Exception as exc:
