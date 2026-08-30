@@ -1,0 +1,13 @@
+data_dir = "data"
+
+[api]
+groq_base_url = "https://api.groq.com/openai/v1"
+groq_model = "whisper-large-v3-turbo"
+llm_base_url = "https://api.openai.com/v1"
+llm_model = "gpt-4o-mini"
+timeout = 30
+temperature = 0
+
+[terminology]
+"Kubernetes" = ["クバネティス", "クーベネティス"]
+"Groq" = ["グロック"]
