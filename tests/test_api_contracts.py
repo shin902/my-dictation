@@ -24,6 +24,7 @@ class ExternalApiContractTests(unittest.TestCase):
         request = call.call_args.args[0]
         self.assertEqual(request.full_url, "https://api.groq.com/openai/v1/audio/transcriptions")
         self.assertEqual(request.headers["Authorization"], "Bearer secret")
+        self.assertEqual(request.headers["User-agent"], "my-dictation/0.1.0")
         self.assertIn("multipart/form-data; boundary=", request.headers["Content-type"])
         self.assertIn(b'name="model"\r\n\r\nwhisper', request.data)
         self.assertIn(b'name="file"; filename="voice.wav"', request.data)

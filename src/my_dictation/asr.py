@@ -31,7 +31,9 @@ class GroqAsr:
         parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{audio.name}"\r\nContent-Type: {mime}\r\n\r\n'.encode())
         parts.extend([audio.read_bytes(), b"\r\n", f"--{boundary}--\r\n".encode()])
         request = urllib.request.Request(self.base_url.rstrip("/") + "/audio/transcriptions", data=b"".join(parts), headers={
-            "Authorization": f"Bearer {self.api_key}", "Content-Type": f"multipart/form-data; boundary={boundary}"
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "User-Agent": "my-dictation/0.1.0",
         })
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response: payload = json.load(response)
