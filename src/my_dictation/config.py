@@ -23,7 +23,36 @@ class Settings:
     terminology: dict[str, list[str]] = field(default_factory=dict)
 
 
+def _load_dotenv(path: Path) -> None:
+    """Load the small KEY=VALUE subset needed by this CLI.
+
+    Existing process variables always win. Quoted values and optional ``export``
+    prefixes are accepted; malformed lines are ignored rather than becoming
+    surprising environment entries.
+    """
+    if not path.is_file():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key, value = key.strip(), value.strip()
+        if not key.replace("_", "a").isalnum() or key[0].isdigit():
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        os.environ.setdefault(key, value)
+
+
 def load_settings(path: str | Path | None = None) -> Settings:
+    # Load project-local secrets without replacing values explicitly exported by
+    # the calling shell.
+    _load_dotenv(Path.cwd() / ".env")
     raw: dict = {}
     selected = Path(path) if path else Path(os.getenv("MY_DICTATION_CONFIG", "config.toml"))
     if selected.exists():

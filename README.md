@@ -21,20 +21,24 @@ pip install -e .
 cp config.example.toml config.toml
 ```
 
-GroqのAPI keyを設定します。
+`.env.example`をコピーしてAPI情報を設定します。`.env`はGit管理対象外です。
 
 ```sh
-export GROQ_API_KEY='gsk_...'
+cp .env.example .env
 ```
 
-LLM校正も使う場合は、OpenAI互換APIの接続情報を設定します。未設定でも、ASR・ITN・用語補正までは動作します。
+```dotenv
+GROQ_API_KEY=gsk_...
 
-```sh
-export LLM_API_KEY='...'
-export LLM_MODEL='gpt-4o-mini'
+# LLM校正を使う場合だけ設定
+LLM_API_KEY=...
+LLM_MODEL=gpt-4o-mini
+
 # OpenAI以外の互換serverを使う場合
-export LLM_BASE_URL='http://localhost:11434/v1'
+# LLM_BASE_URL=http://localhost:11434/v1
 ```
+
+起動時にカレントディレクトリの`.env`を自動で読み込みます。同じ名前の環境変数を`export`している場合は、明示的にexportした値が優先されます。LLM設定がなくても、ASR・ITN・用語補正までは動作します。
 
 既定ではカレントディレクトリの`config.toml`を読みます。別の設定を使う場合は、各コマンドの前に`--config`を指定します。
 
