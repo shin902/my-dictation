@@ -7,6 +7,7 @@ from typing import Protocol
 
 from .asr import AsrResult
 from .config import Settings
+from .external_adapters import NagaYuMondegreenTerminology, WeTextProcessingJapaneseItn
 from .processors import LimitedJapaneseItn, MondegreenTerminology, OpenAIProofreader
 from .storage import RecordStore, Spool
 
@@ -19,8 +20,19 @@ class Pipeline:
     def __init__(self, settings: Settings, asr: Asr | None = None):
         self.settings, self.asr = settings, asr
         self.store, self.spool = RecordStore(settings.data_dir), Spool(settings.data_dir)
-        self.itn = LimitedJapaneseItn()
-        self.terminology = MondegreenTerminology(settings.terminology)
+        builtin_itn = LimitedJapaneseItn()
+        builtin_terminology = MondegreenTerminology(settings.terminology)
+        if settings.itn_backend not in {"builtin", "wetextprocessing"}:
+            raise ValueError(f"unknown ITN backend: {settings.itn_backend}")
+        if settings.terminology_backend not in {"builtin", "mondegreen"}:
+            raise ValueError(f"unknown terminology backend: {settings.terminology_backend}")
+        if settings.terminology_backend == "mondegreen" and settings.terminology_glossary is None:
+            raise ValueError("processors.terminology_glossary is required for the mondegreen backend")
+        self.itn = (WeTextProcessingJapaneseItn(builtin_itn)
+                    if settings.itn_backend == "wetextprocessing" else builtin_itn)
+        self.terminology = (NagaYuMondegreenTerminology(settings.terminology_glossary, settings.terminology,
+                                                       fallback=builtin_terminology)
+                            if settings.terminology_backend == "mondegreen" else builtin_terminology)
         self.llm = OpenAIProofreader(settings.llm_base_url, settings.llm_api_key, settings.llm_model, settings.timeout, settings.temperature)
 
     def process_text(self, text: str, asr_result: AsrResult | None = None) -> tuple[str, Path]:

@@ -23,6 +23,23 @@ export LLM_MODEL=gpt-4o-mini # または config.toml の api.llm_model
 
 `LLM_API_KEY`またはmodelがない場合、LLM段階は安全に不採用となり、用語補正後の文を返します。設定ファイルは `--config` または `MY_DICTATION_CONFIG` で選べます。base URL、model、timeout、temperature、用語辞書の例は `config.example.toml` を参照してください。GroqとLLMはいずれもOpenAI互換HTTP endpointへ標準ライブラリだけで接続します。
 
+基本installは軽量な内蔵processorを使います。実プロジェクトのadapterを選ぶ場合だけ、必要なextraをinstallし、`[processors]` で明示的に切り替えます。
+
+```sh
+pip install -e '.[wetextprocessing]' # WeTextProcessing（Pyniniを含む）
+pip install -e '.[mondegreen]'       # NagaYu/mondegreen（G2P依存を含む）
+# または: pip install -e '.[external-processors]'
+```
+
+```toml
+[processors]
+itn = "wetextprocessing"       # default: "builtin"
+terminology = "mondegreen"     # default: "builtin"
+terminology_glossary = "config/glossary.csv"
+```
+
+WeText adapterは `tn.japanese.normalizer.Normalizer` に対象カテゴリのspanだけを渡します。Mondegreen adapterは `load_glossary` と `ConstrainedCorrector(..., use_lm=false)` を使います。外部moduleのimport・実行に失敗した場合は安全に内蔵processorへfallbackし、base installの従来動作を維持します。backend名が不正、またはMondegreen選択時にglossary pathがない設定は起動時エラーになります。環境変数 `MY_DICTATION_ITN_BACKEND` / `MY_DICTATION_TERMINOLOGY_BACKEND` でもbackendを選択できます。
+
 ## CLI
 
 ```sh
@@ -38,8 +55,8 @@ my-dictation process-text '三個のクバネティス'
 
 ## 処理上の制約
 
-- ITNはNFKC数字、および日付・時刻・金額・明示した単位の直前にある漢数字だけを扱います。電話番号、住所、曖昧な助数詞は対象外です。
-- Mondegreen connectorは設定したcanonical termと発音aliasだけを厳しい閾値で局所置換します。LM rerankerや辞書自動更新はありません。
+- ITNは全角数字、および日付・時刻・金額・明示した単位を伴う数字だけを扱います。外部adapterでもspanを限定し、電話番号、住所、曖昧な助数詞は対象外です。
+- 用語補正は、内蔵matcherまたは実際のNagaYu/mondegreen connectorを明示選択します。いずれもLM rerankerを使わず、辞書自動更新もしません。
 - LLMには情報追加、要約、文体変更を禁止する構造化JSON promptを送り、保護語が1つでも消えた場合やAPI/JSONエラー時には用語補正後へfallbackします。
 - N-best、学習、GUI、常駐録音、SQLiteは初期scope外です。
 
@@ -56,8 +73,8 @@ PYTHONPATH=src python -m unittest discover -s tests -v
 - [x] Groq ASR adapter（provider responseを隔離、1-best、失敗理由）
 - [x] 送信前atomic spool、失敗時保持、明示retry
 - [x] ASR成功・履歴保存完了後のみ音声削除
-- [x] 数字・日付・時刻・金額・単位に限定した決定的ITNとchanges
-- [x] 小さな手動辞書によるMondegreen接続、厳しい照合、保護語
+- [x] WeTextProcessing日本語APIの隔離adapter（optional extra、対象span限定、changes、内蔵fallback）
+- [x] NagaYu/mondegreen `load_glossary` / `ConstrainedCorrector` のLMなし隔離adapter（optional extra、保護語、内蔵fallback）
 - [x] vendor SDK非依存のOpenAI互換LLM、構造化出力、保守的prompt
 - [x] 保護語検証、違反・timeout・API失敗時fallback
 - [x] 各段階のinput/output/changeを含む1入力1 JSON

@@ -8,6 +8,13 @@ llm_model = "gpt-4o-mini"
 timeout = 30
 temperature = 0
 
+[processors]
+# Base install defaults. Select external adapters only after installing their extras.
+itn = "builtin"                  # "builtin" or "wetextprocessing"
+terminology = "builtin"          # "builtin" or "mondegreen"
+# Required when terminology = "mondegreen"; format is defined by NagaYu/mondegreen.
+# terminology_glossary = "config/glossary.csv"
+
 [terminology]
 "Kubernetes" = ["クバネティス", "クーベネティス"]
 "Groq" = ["グロック"]

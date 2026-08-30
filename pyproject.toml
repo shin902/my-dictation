@@ -11,6 +11,14 @@ requires-python = ">=3.11"
 license = {text = "MIT"}
 dependencies = []
 
+[project.optional-dependencies]
+wetextprocessing = ["WeTextProcessing"]
+mondegreen = ["mondegreen @ git+https://github.com/NagaYu/mondegreen.git"]
+external-processors = [
+  "WeTextProcessing",
+  "mondegreen @ git+https://github.com/NagaYu/mondegreen.git",
+]
+
 [project.scripts]
 my-dictation = "my_dictation.cli:main"
 

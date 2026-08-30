@@ -256,7 +256,7 @@ my-dictation process-text <text>
 
 ### フェーズ3：ITN
 
-1. WeTextProcessingを隔離して接続する
+1. WeTextProcessing日本語APIをoptional adapterとして隔離して接続する（未導入・失敗時は限定的な内蔵ITNへfallback）
 2. 対象カテゴリを限定する
 3. 入出力と変更内容を履歴へ残す
 4. 平仮名数詞と固有名詞破壊を手元の例で確認する
@@ -266,7 +266,7 @@ my-dictation process-text <text>
 ### フェーズ4：Mondegreen
 
 1. 小さな辞書形式を決める
-2. LMなしでMondegreenを接続する
+2. NagaYu/mondegreenの`load_glossary` / `ConstrainedCorrector`をLMなしでoptional接続する（未導入・失敗時は内蔵matcherへfallback）
 3. 厳しい閾値を設定する
 4. 修正内容と保護語を返す
 
@@ -304,7 +304,14 @@ my-dictation process-text <text>
 - LLM API失敗時にも前段テキストを返す
 - API keyや音声を履歴JSONへ保存しない
 
-## 8. 実装後に再検討する事項
+## 8. 実装自己監査（外部processor）
+
+- WeTextProcessingはbase依存にはせず、`tn.japanese.normalizer.Normalizer`を隔離adapterから呼ぶ。外部normalizerへ渡すのは初期scopeの数字・日付・時刻・金額・単位spanだけである。
+- NagaYu/mondegreenはbase依存にはせず、`load_glossary`と`ConstrainedCorrector(..., use_lm=False)`を隔離adapterから呼ぶ。glossary形式はupstreamに従う。
+- 通常installの既定値は従来の内蔵実装である。外部backendは設定で明示選択し、optional依存がない場合や処理失敗時は内蔵実装へ安全にfallbackする。
+- CIは重いPynini/G2P依存をinstallせず、mock moduleによるAPI contractを検証する。実依存との結合確認はoptional extraを導入した環境で別途必要である。
+
+## 9. 実装後に再検討する事項
 
 - ASR providerの追加
 - 日本語ITNの対象拡張

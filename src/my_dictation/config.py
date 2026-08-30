@@ -17,6 +17,9 @@ class Settings:
     llm_model: str | None = None
     timeout: float = 30.0
     temperature: float = 0.0
+    itn_backend: str = "builtin"
+    terminology_backend: str = "builtin"
+    terminology_glossary: Path | None = None
     terminology: dict[str, list[str]] = field(default_factory=dict)
 
 
@@ -37,6 +40,9 @@ def load_settings(path: str | Path | None = None) -> Settings:
         llm_model=os.getenv("LLM_MODEL", api.get("llm_model")),
         timeout=float(os.getenv("MY_DICTATION_TIMEOUT", api.get("timeout", 30))),
         temperature=float(api.get("temperature", 0)),
+        itn_backend=os.getenv("MY_DICTATION_ITN_BACKEND", raw.get("processors", {}).get("itn", "builtin")),
+        terminology_backend=os.getenv("MY_DICTATION_TERMINOLOGY_BACKEND", raw.get("processors", {}).get("terminology", "builtin")),
+        terminology_glossary=(Path(value) if (value := raw.get("processors", {}).get("terminology_glossary")) else None),
         terminology=raw.get("terminology", {}),
     )
     return cfg
