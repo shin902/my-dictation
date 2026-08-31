@@ -17,4 +17,8 @@ terminology = "builtin"          # "builtin" or "mondegreen"
 
 [terminology]
 "Kubernetes" = ["クバネティス", "クーベネティス"]
-"Groq" = ["グロック"]
+"groq" = ["グロック", "Groq"]
+"PNG" = ["png"]
+"Base64" = ["base64"]
+"JSONL" = ["jsonl"]
+"SQL" = ["sql"]

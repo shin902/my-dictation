@@ -115,7 +115,7 @@ my-dictation retry 'ファイル名またはIDの一部'
 ```toml
 [terminology]
 "Kubernetes" = ["クバネティス", "クーベネティス"]
-"Groq" = ["グロック"]
+"groq" = ["グロック", "Groq"]
 "ROCmFPX" = ["ロックムエフピーエックス"]
 ```
 
