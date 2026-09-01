@@ -22,6 +22,10 @@ class GroqAsr:
     def transcribe(self, audio: Path) -> AsrResult:
         if not self.api_key:
             raise RuntimeError("GROQ_API_KEY is required")
+        if not audio.is_file():
+            raise RuntimeError(f"Groq ASR input is not a regular file: {audio}")
+        if audio.stat().st_size == 0:
+            raise RuntimeError(f"Groq ASR input is empty: {audio}")
         boundary = f"----my-dictation-{uuid.uuid4().hex}"
         mime = mimetypes.guess_type(audio.name)[0] or "application/octet-stream"
         parts = []
@@ -41,4 +45,5 @@ class GroqAsr:
         except Exception as exc:
             raise RuntimeError(f"Groq ASR failed: {exc}") from exc
         if not isinstance(text, str): raise RuntimeError("Groq ASR returned no text")
+        if not text.strip(): raise RuntimeError("Groq ASR returned empty text")
         return AsrResult(text, "groq", self.model)

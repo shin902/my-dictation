@@ -155,6 +155,14 @@ class OpenAIProofreader:
         self.base_url, self.api_key, self.model, self.timeout, self.temperature = base_url, api_key, model, timeout, temperature
 
     def process(self, text: str, protected: list[str]) -> StageResult:
+        # Keep this guard here as well as in Pipeline.process_text: this
+        # processor is independently usable, and an empty prompt is allowed to
+        # produce hallucinated text unless it is rejected before the request.
+        if not isinstance(text, str) or not text.strip():
+            reason = "LLM input is empty"
+            return StageResult("llm", "openai-compatible", text, text, accepted=False,
+                               error=reason, candidate_output="", rejected_output="",
+                               rejection_reason=reason)
         if not self.api_key or not self.model:
             return StageResult("llm", "openai-compatible", text, text, accepted=False, error="LLM is not configured")
         prompt = ("これはリライトではなく、原文忠実性を最優先する局所校正です。変更しないことを既定にしてください。\n"

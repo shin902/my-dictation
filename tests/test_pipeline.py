@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+import wave
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,6 +17,14 @@ class FakeAsr:
     def transcribe(self, audio):
         if self.fail: raise RuntimeError("offline")
         return AsrResult("二千二十四年三月五日 クバネティス", "groq", "mock")
+
+
+class EmptyAsr:
+    def __init__(self, text=""):
+        self.text = text
+
+    def transcribe(self, audio):
+        return AsrResult(self.text, "groq", "mock")
 
 
 class ProcessorTests(unittest.TestCase):
@@ -104,6 +113,14 @@ class ProcessorTests(unittest.TestCase):
         result = OpenAIProofreader("http://mock", "key", "model", 1, 0).process("安全", [])
         self.assertFalse(result.accepted); self.assertEqual(result.output, "安全")
 
+    @patch("my_dictation.processors.json_request")
+    def test_llm_skips_blank_input(self, request):
+        result = OpenAIProofreader("http://mock", "key", "model", 1, 0).process(" \n\t", [])
+        self.assertFalse(result.accepted)
+        self.assertEqual(result.output, " \n\t")
+        self.assertIn("empty", result.rejection_reason)
+        request.assert_not_called()
+
 
 class PipelineTests(unittest.TestCase):
     def setUp(self):
@@ -121,6 +138,48 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(record["asr"]["raw"], "二千二十四年三月五日 クバネティス")
         self.assertEqual([s["name"] for s in record["stages"]], ["itn", "terminology", "llm"])
         self.assertNotIn("api_key", path.read_text())
+
+    def test_empty_audio_is_rejected_before_spooling(self):
+        empty_audio = self.root / "empty.wav"
+        empty_audio.touch()
+        asr = FakeAsr()
+        pipeline = Pipeline(self.settings, asr)
+        with patch.object(asr, "transcribe") as transcribe:
+            with self.assertRaisesRegex(ValueError, "audio file is empty"):
+                pipeline.transcribe(empty_audio)
+        transcribe.assert_not_called()
+        self.assertEqual(pipeline.spool.pending(), [])
+
+    def test_silent_wav_is_rejected_before_spooling(self):
+        silent_audio = self.root / "silent.wav"
+        with wave.open(str(silent_audio), "wb") as audio:
+            audio.setnchannels(1)
+            audio.setsampwidth(2)
+            audio.setframerate(16000)
+            audio.writeframes(b"\0" * 3200)
+        pipeline = Pipeline(self.settings, FakeAsr())
+        with self.assertRaisesRegex(ValueError, "no audio signal"):
+            pipeline.transcribe(silent_audio)
+        self.assertEqual(pipeline.spool.pending(), [])
+
+    def test_empty_asr_result_does_not_call_llm_or_save_record(self):
+        settings = Settings(data_dir=self.root, llm_api_key="key", llm_model="model")
+        pipeline = Pipeline(settings, EmptyAsr())
+        with patch("my_dictation.processors.json_request") as request:
+            with self.assertRaisesRegex(ValueError, "transcription is empty"):
+                pipeline.transcribe(self.audio)
+        request.assert_not_called()
+        self.assertEqual(len(pipeline.spool.pending()), 1)
+        self.assertFalse(pipeline.store.root.exists())
+
+    def test_whitespace_asr_result_does_not_call_llm(self):
+        settings = Settings(data_dir=self.root, llm_api_key="key", llm_model="model")
+        pipeline = Pipeline(settings, EmptyAsr(" \n\t"))
+        with patch("my_dictation.processors.json_request") as request:
+            with self.assertRaisesRegex(ValueError, "transcription is empty"):
+                pipeline.transcribe(self.audio)
+        request.assert_not_called()
+        self.assertEqual(len(pipeline.spool.pending()), 1)
 
     def test_asr_failure_leaves_spool_for_retry(self):
         pipeline = Pipeline(self.settings, FakeAsr(True))

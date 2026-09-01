@@ -12,6 +12,7 @@ fi
 
 AUDIO=$1
 [[ -f $AUDIO ]] || { echo "error: audio file not found: $AUDIO" >&2; exit 2; }
+[[ -s $AUDIO ]] || { echo "error: audio file is empty: $AUDIO" >&2; exit 2; }
 [[ -x $CLI ]] || { echo "error: CLI is not executable: $CLI" >&2; exit 2; }
 [[ -f $CONFIG ]] || { echo "error: config file not found: $CONFIG" >&2; exit 2; }
 

@@ -9,7 +9,7 @@ from .asr import AsrResult
 from .config import Settings
 from .external_adapters import NagaYuMondegreenTerminology, WeTextProcessingJapaneseItn
 from .processors import LimitedJapaneseItn, MondegreenTerminology, OpenAIProofreader
-from .storage import RecordStore, Spool
+from .storage import RecordStore, Spool, validate_audio_file
 
 
 class Asr(Protocol):
@@ -36,6 +36,11 @@ class Pipeline:
         self.llm = OpenAIProofreader(settings.llm_base_url, settings.llm_api_key, settings.llm_model, settings.timeout, settings.temperature)
 
     def process_text(self, text: str, asr_result: AsrResult | None = None) -> tuple[str, Path]:
+        # Never send an absent transcription to a generative processor. An LLM
+        # can turn an empty prompt into plausible-looking text, which would be
+        # indistinguishable from real dictation at the CLI/paste boundary.
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("transcription is empty")
         itn = self.itn.process(text)
         terminology = self.terminology.process(itn.output)
         llm = self.llm.process(terminology.output, terminology.protected_terms)
@@ -55,6 +60,7 @@ class Pipeline:
 
     def retry_file(self, spooled: Path) -> tuple[str, Path]:
         if self.asr is None: raise RuntimeError("ASR is not configured")
+        validate_audio_file(spooled)
         result = self.asr.transcribe(spooled)  # On failure the durable spool is untouched.
         output, record_path = self.process_text(result.text, result)
         # Record has been atomically committed before the only audio copy is removed.

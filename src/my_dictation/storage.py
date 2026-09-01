@@ -5,8 +5,48 @@ import os
 import shutil
 import tempfile
 import uuid
+import wave
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+def _wav_has_signal(path: Path) -> bool | None:
+    """Return whether a readable PCM WAV contains a non-silent sample.
+
+    ``None`` means that the file is not a WAV format that this lightweight
+    check understands; those files are left to the ASR provider to validate.
+    """
+    try:
+        with wave.open(str(path), "rb") as audio:
+            if audio.getcomptype() != "NONE":
+                return None
+            if audio.getnframes() == 0:
+                return False
+            width = audio.getsampwidth()
+            if width not in {1, 2, 3, 4}:
+                return None
+            silence = 128 if width == 1 else 0
+            while chunk := audio.readframes(4096):
+                if width == 1:
+                    has_signal = any(sample != silence for sample in chunk)
+                else:
+                    has_signal = any(chunk)
+                if has_signal:
+                    return True
+            return False
+    except (OSError, EOFError, wave.Error):
+        return None
+
+
+def validate_audio_file(path: Path) -> None:
+    """Reject inputs that cannot contain an audio recording."""
+    if not path.is_file():
+        raise ValueError(f"audio file is not a regular file: {path}")
+    if path.stat().st_size == 0:
+        raise ValueError(f"audio file is empty: {path}")
+    wav_signal = _wav_has_signal(path)
+    if wav_signal is False:
+        raise ValueError(f"audio file contains no audio signal: {path}")
 
 
 class RecordStore:
@@ -56,6 +96,7 @@ class Spool:
         self.root = data_dir / "spool"
 
     def put(self, source: Path) -> Path:
+        validate_audio_file(source)
         self.root.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
         target = self.root / f"{stamp}-{uuid.uuid4().hex}{source.suffix.lower()}"

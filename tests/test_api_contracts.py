@@ -42,6 +42,18 @@ class ExternalApiContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "Groq ASR failed: 503"):
                     GroqAsr("http://mock", "key", "model").transcribe(audio)
 
+    def test_groq_rejects_empty_audio_and_empty_transcription(self):
+        with tempfile.TemporaryDirectory() as directory:
+            empty_audio = Path(directory) / "empty.wav"
+            empty_audio.touch()
+            with self.assertRaisesRegex(RuntimeError, "input is empty"):
+                GroqAsr("http://mock", "key", "model").transcribe(empty_audio)
+
+            audio = Path(directory) / "audio.wav"; audio.write_bytes(b"RIFFaudio")
+            with patch("urllib.request.urlopen", return_value=Response({"text": " \n"})):
+                with self.assertRaisesRegex(RuntimeError, "returned empty text"):
+                    GroqAsr("http://mock", "key", "model").transcribe(audio)
+
     def test_json_request_identifies_the_client(self):
         with patch("urllib.request.urlopen", return_value=Response({"ok": True})) as call:
             self.assertEqual(json_request("http://mock", {"input": "text"}, "secret", 3), {"ok": True})
