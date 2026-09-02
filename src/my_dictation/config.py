@@ -9,9 +9,13 @@ from pathlib import Path
 @dataclass
 class Settings:
     data_dir: Path = Path("data")
+    asr_provider: str = "groq"
     groq_base_url: str = "https://api.groq.com/openai/v1"
     groq_api_key: str | None = None
     groq_model: str = "whisper-large-v3-turbo"
+    elevenlabs_base_url: str = "https://api.elevenlabs.io"
+    elevenlabs_api_key: str | None = None
+    elevenlabs_model: str = "scribe_v1"
     llm_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str | None = None
     llm_model: str | None = None
@@ -59,11 +63,16 @@ def load_settings(path: str | Path | None = None) -> Settings:
         with selected.open("rb") as f:
             raw = tomllib.load(f)
     api = raw.get("api", {})
+    asr_provider = os.getenv("MY_DICTATION_ASR_PROVIDER", os.getenv("ASR_PROVIDER", api.get("asr_provider", api.get("provider", Settings.asr_provider))))
     cfg = Settings(
         data_dir=Path(os.getenv("MY_DICTATION_DATA_DIR", raw.get("data_dir", "data"))),
+        asr_provider=str(asr_provider).lower(),
         groq_base_url=os.getenv("GROQ_BASE_URL", api.get("groq_base_url", Settings.groq_base_url)),
         groq_api_key=os.getenv("GROQ_API_KEY", api.get("groq_api_key")),
         groq_model=os.getenv("GROQ_MODEL", api.get("groq_model", Settings.groq_model)),
+        elevenlabs_base_url=os.getenv("ELEVENLABS_BASE_URL", api.get("elevenlabs_base_url", Settings.elevenlabs_base_url)),
+        elevenlabs_api_key=os.getenv("ELEVENLABS_API_KEY", api.get("elevenlabs_api_key")),
+        elevenlabs_model=os.getenv("ELEVENLABS_MODEL", api.get("elevenlabs_model", Settings.elevenlabs_model)),
         llm_base_url=os.getenv("LLM_BASE_URL", api.get("llm_base_url", Settings.llm_base_url)),
         llm_api_key=os.getenv("LLM_API_KEY", api.get("llm_api_key")),
         llm_model=os.getenv("LLM_MODEL", api.get("llm_model")),

@@ -1,8 +1,12 @@
 data_dir = "data"
 
 [api]
+# "groq" (default) or "elevenlabs"
+asr_provider = "groq"
 groq_base_url = "https://api.groq.com/openai/v1"
 groq_model = "whisper-large-v3-turbo"
+elevenlabs_base_url = "https://api.elevenlabs.io"
+elevenlabs_model = "scribe_v1"
 llm_base_url = "https://api.openai.com/v1"
 llm_model = "gpt-4o-mini"
 timeout = 30

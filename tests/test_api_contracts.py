@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from my_dictation.asr import GroqAsr
+from my_dictation.asr import ElevenLabsAsr, GroqAsr
 from my_dictation.http import json_request
 from my_dictation.processors import OpenAIProofreader
 
@@ -32,6 +32,43 @@ class ExternalApiContractTests(unittest.TestCase):
         self.assertIn(b"RIFFaudio", request.data)
         self.assertEqual(call.call_args.kwargs["timeout"], 7)
         self.assertEqual((result.text, result.model), ("成功", "whisper"))
+
+    def test_elevenlabs_scribe_multipart_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            audio = Path(directory) / "voice.wav"; audio.write_bytes(b"RIFFaudio")
+            with patch("urllib.request.urlopen", return_value=Response({"text": "成功"})) as call:
+                result = ElevenLabsAsr("https://api.elevenlabs.io/v1/", "secret", "scribe_v1", 7).transcribe(audio)
+        request = call.call_args.args[0]
+        self.assertEqual(request.full_url, "https://api.elevenlabs.io/v1/speech-to-text")
+        self.assertEqual(request.headers["Xi-api-key"], "secret")
+        self.assertEqual(request.headers["User-agent"], "my-dictation/0.1.0")
+        self.assertIn("multipart/form-data; boundary=", request.headers["Content-type"])
+        self.assertIn(b'name="model_id"\r\n\r\nscribe_v1', request.data)
+        self.assertIn(b'name="file"; filename="voice.wav"', request.data)
+        self.assertIn(b"RIFFaudio", request.data)
+        self.assertEqual(call.call_args.kwargs["timeout"], 7)
+        self.assertEqual((result.text, result.provider, result.model), ("成功", "elevenlabs", "scribe_v1"))
+
+    def test_elevenlabs_requires_auth_and_wraps_http_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            audio = Path(directory) / "a.wav"; audio.write_bytes(b"x")
+            with self.assertRaisesRegex(RuntimeError, "ELEVENLABS_API_KEY"):
+                ElevenLabsAsr("http://mock", None).transcribe(audio)
+            with patch("urllib.request.urlopen", side_effect=OSError("503")):
+                with self.assertRaisesRegex(RuntimeError, "ElevenLabs ASR failed: 503"):
+                    ElevenLabsAsr("http://mock", "key").transcribe(audio)
+
+    def test_elevenlabs_rejects_empty_audio_and_empty_transcription(self):
+        with tempfile.TemporaryDirectory() as directory:
+            empty_audio = Path(directory) / "empty.wav"
+            empty_audio.touch()
+            with self.assertRaisesRegex(RuntimeError, "input is empty"):
+                ElevenLabsAsr("http://mock", "key").transcribe(empty_audio)
+
+            audio = Path(directory) / "audio.wav"; audio.write_bytes(b"RIFFaudio")
+            with patch("urllib.request.urlopen", return_value=Response({"text": " \n"})):
+                with self.assertRaisesRegex(RuntimeError, "returned empty text"):
+                    ElevenLabsAsr("http://mock", "key").transcribe(audio)
 
     def test_groq_requires_auth_and_wraps_http_failure(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -13,10 +13,12 @@ from my_dictation.storage import RecordStore
 
 
 class FakeAsr:
-    def __init__(self, fail=False): self.fail = fail
+    def __init__(self, fail=False, provider="groq", model="mock"):
+        self.fail, self.provider, self.model = fail, provider, model
+
     def transcribe(self, audio):
         if self.fail: raise RuntimeError("offline")
-        return AsrResult("二千二十四年三月五日 クバネティス", "groq", "mock")
+        return AsrResult("二千二十四年三月五日 クバネティス", self.provider, self.model)
 
 
 class EmptyAsr:
@@ -138,6 +140,13 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(record["asr"]["raw"], "二千二十四年三月五日 クバネティス")
         self.assertEqual([s["name"] for s in record["stages"]], ["itn", "terminology", "llm"])
         self.assertNotIn("api_key", path.read_text())
+
+    def test_asr_provider_and_model_are_recorded(self):
+        pipeline = Pipeline(self.settings, FakeAsr(provider="elevenlabs", model="scribe_v1"))
+        _, path = pipeline.transcribe(self.audio)
+        record = json.loads(path.read_text())
+        self.assertEqual(record["asr"]["provider"], "elevenlabs")
+        self.assertEqual(record["asr"]["model"], "scribe_v1")
 
     def test_empty_audio_is_rejected_before_spooling(self):
         empty_audio = self.root / "empty.wav"

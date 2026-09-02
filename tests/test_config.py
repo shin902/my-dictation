@@ -23,6 +23,26 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(settings.llm_api_key, "llm-from-dotenv")
             self.assertEqual(settings.llm_model, "dotenv-model")
 
+    def test_loads_elevenlabs_provider_from_toml_and_environment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "config.toml"
+            config.write_text(
+                '[api]\n'
+                'asr_provider = "elevenlabs"\n'
+                'elevenlabs_base_url = "http://mock/v1"\n'
+                'elevenlabs_model = "scribe_custom"\n',
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"ELEVENLABS_API_KEY": "from-shell"}, clear=True), patch(
+                "my_dictation.config.Path.cwd", return_value=root
+            ):
+                settings = load_settings(config)
+            self.assertEqual(settings.asr_provider, "elevenlabs")
+            self.assertEqual(settings.elevenlabs_api_key, "from-shell")
+            self.assertEqual(settings.elevenlabs_base_url, "http://mock/v1")
+            self.assertEqual(settings.elevenlabs_model, "scribe_custom")
+
     def test_exported_environment_wins_over_dotenv(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

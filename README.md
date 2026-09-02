@@ -1,11 +1,11 @@
 # my-dictation
 
-Groqの1-best ASRを、限定的な日本語ITN、手動用語辞書（Mondegreen）、OpenAI互換LLMによる保守的校正へ通す、小さく監査可能なPython CLIです。各入力を1 JSONに保存します。
+GroqまたはElevenLabs Scribeの1-best ASRを、限定的な日本語ITN、手動用語辞書（Mondegreen）、OpenAI互換LLMによる保守的校正へ通す、小さく監査可能なPython CLIです。各入力を1 JSONに保存します。
 
 ## 必要環境
 
 - Python 3.11以上
-- 音声認識にはGroq API key
+- 音声認識にはGroqまたはElevenLabs API key（既定はGroq）
 - LLM校正には任意のOpenAI互換API（未設定でも動作可能）
 
 ## 使い方
@@ -28,7 +28,14 @@ cp .env.example .env
 ```
 
 ```dotenv
+# Groqを使う場合（既定）
+MY_DICTATION_ASR_PROVIDER=groq
 GROQ_API_KEY=gsk_...
+
+# ElevenLabs Scribeを使う場合はproviderとkeyを変更
+# MY_DICTATION_ASR_PROVIDER=elevenlabs
+# ELEVENLABS_API_KEY=xi-...
+# ELEVENLABS_MODEL=scribe_v1
 
 # LLM校正を使う場合だけ設定
 LLM_API_KEY=...
@@ -67,11 +74,13 @@ record: data/records/2026-08-31/123456-<uuid>.json
 my-dictation transcribe recording.wav
 ```
 
-対応音声形式はGroq Speech-to-Text APIが受け付ける形式に従います。処理順は次の通りです。
+対応音声形式は選択したASR APIが受け付ける形式に従います。処理順は次の通りです。
 
 ```text
-Groq ASR → ITN → Mondegreen用語補正 → LLM校正 → 出力
+選択したASR（Groq / ElevenLabs Scribe） → ITN → Mondegreen用語補正 → LLM校正 → 出力
 ```
+
+ASR providerは`config.toml`の`[api] asr_provider = "groq"`または`"elevenlabs"`でも選択できます。ElevenLabsは現行の`/v1/speech-to-text` multipart APIへ`xi-api-key`、`model_id`（既定`scribe_v1`）で接続します。API keyは履歴へ保存されません。
 
 音声は送信前に`data/spool/`へ一時コピーされます。ASRと履歴保存が成功すると削除され、失敗した場合だけ残ります。
 

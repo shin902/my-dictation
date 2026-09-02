@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from .asr import GroqAsr
+from .asr import ElevenLabsAsr, GroqAsr
 from .config import load_settings
 from .pipeline import Pipeline
 
@@ -21,7 +21,13 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv); settings = load_settings(args.config)
-    asr = GroqAsr(settings.groq_base_url, settings.groq_api_key, settings.groq_model, settings.timeout)
+    if settings.asr_provider == "groq":
+        asr = GroqAsr(settings.groq_base_url, settings.groq_api_key, settings.groq_model, settings.timeout)
+    elif settings.asr_provider == "elevenlabs":
+        asr = ElevenLabsAsr(settings.elevenlabs_base_url, settings.elevenlabs_api_key, settings.elevenlabs_model, settings.timeout)
+    else:
+        print(f"error: unknown ASR provider: {settings.asr_provider}", file=sys.stderr)
+        return 1
     pipeline = Pipeline(settings, asr)
     try:
         if args.command == "process-text":
