@@ -10,6 +10,7 @@ from .config import Settings
 from .external_adapters import NagaYuMondegreenTerminology, WeTextProcessingJapaneseItn
 from .processors import LimitedJapaneseItn, MondegreenTerminology, OpenAIProofreader
 from .storage import AudioStore, RecordStore, Spool, validate_audio_file
+from .vad import VadResult, VoiceActivityTrimmer
 
 
 class Asr(Protocol):
@@ -22,6 +23,14 @@ class Pipeline:
         self.store = RecordStore(settings.data_dir)
         self.spool = Spool(settings.data_dir)
         self.audio = AudioStore(settings.data_dir)
+        self.vad = VoiceActivityTrimmer(
+            enabled=settings.vad_enabled,
+            backend=settings.vad_backend,
+            padding_ms=settings.vad_padding_ms,
+            frame_ms=settings.vad_frame_ms,
+            min_speech_ms=settings.vad_min_speech_ms,
+            aggressiveness=settings.vad_aggressiveness,
+        )
         builtin_itn = LimitedJapaneseItn()
         builtin_terminology = MondegreenTerminology(settings.terminology)
         if settings.itn_backend not in {"builtin", "wetextprocessing"}:
@@ -45,6 +54,7 @@ class Pipeline:
         record_id: str | None = None,
         created_at: datetime | None = None,
         audio_path: Path | None = None,
+        vad: VadResult | None = None,
     ) -> tuple[str, Path]:
         # Never send an absent transcription to a generative processor. An LLM
         # can turn an empty prompt into plausible-looking text, which would be
@@ -65,6 +75,7 @@ class Pipeline:
             "stages": [itn.to_dict(), terminology.to_dict(), llm.to_dict()],
             "output": llm.output, "final": None,
             "audio_path": audio_path.as_posix() if audio_path else None,
+            "vad": vad.to_dict() if vad else None,
         }
         return llm.output, self.store.save(record)
 
@@ -75,6 +86,10 @@ class Pipeline:
 
     def retry_file(self, spooled: Path) -> tuple[str, Path]:
         if self.asr is None: raise RuntimeError("ASR is not configured")
+        validate_audio_file(spooled)
+        vad = self.vad.trim(spooled)
+        # A successful trim is written atomically.  Validate again so an
+        # unexpected decoder/writer issue cannot send an invalid file to ASR.
         validate_audio_file(spooled)
         record_id, created_at = self.spool.metadata(spooled)
         audio_path = self.audio.relative_path(record_id, created_at, spooled.suffix)
@@ -88,6 +103,7 @@ class Pipeline:
             record_id=record_id,
             created_at=created_at,
             audio_path=audio_path,
+            vad=vad,
         )
         self.audio.retain(spooled, audio_path)
         return output, record_path

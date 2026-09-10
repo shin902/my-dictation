@@ -25,6 +25,12 @@ class Settings:
     terminology_backend: str = "builtin"
     terminology_glossary: Path | None = None
     terminology: dict[str, list[str]] = field(default_factory=dict)
+    vad_enabled: bool = True
+    vad_backend: str = "webrtc"
+    vad_padding_ms: int = 300
+    vad_frame_ms: int = 30
+    vad_min_speech_ms: int = 90
+    vad_aggressiveness: int = 2
 
 
 def _load_dotenv(path: Path) -> None:
@@ -53,6 +59,18 @@ def _load_dotenv(path: Path) -> None:
         os.environ.setdefault(key, value)
 
 
+def _parse_bool(value: object, name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    raise ValueError(f"{name} must be a boolean")
+
+
 def load_settings(path: str | Path | None = None) -> Settings:
     # Load project-local secrets without replacing values explicitly exported by
     # the calling shell.
@@ -63,6 +81,7 @@ def load_settings(path: str | Path | None = None) -> Settings:
         with selected.open("rb") as f:
             raw = tomllib.load(f)
     api = raw.get("api", {})
+    vad = raw.get("vad", {})
     asr_provider = os.getenv("MY_DICTATION_ASR_PROVIDER", os.getenv("ASR_PROVIDER", api.get("asr_provider", api.get("provider", Settings.asr_provider))))
     cfg = Settings(
         data_dir=Path(os.getenv("MY_DICTATION_DATA_DIR", raw.get("data_dir", "data"))),
@@ -82,5 +101,11 @@ def load_settings(path: str | Path | None = None) -> Settings:
         terminology_backend=os.getenv("MY_DICTATION_TERMINOLOGY_BACKEND", raw.get("processors", {}).get("terminology", "builtin")),
         terminology_glossary=(Path(value) if (value := raw.get("processors", {}).get("terminology_glossary")) else None),
         terminology=raw.get("terminology", {}),
+        vad_enabled=_parse_bool(os.getenv("MY_DICTATION_VAD_ENABLED", vad.get("enabled", True)), "MY_DICTATION_VAD_ENABLED"),
+        vad_backend=str(os.getenv("MY_DICTATION_VAD_BACKEND", vad.get("backend", "webrtc"))).lower(),
+        vad_padding_ms=int(os.getenv("MY_DICTATION_VAD_PADDING_MS", vad.get("padding_ms", 300))),
+        vad_frame_ms=int(os.getenv("MY_DICTATION_VAD_FRAME_MS", vad.get("frame_ms", 30))),
+        vad_min_speech_ms=int(os.getenv("MY_DICTATION_VAD_MIN_SPEECH_MS", vad.get("min_speech_ms", 90))),
+        vad_aggressiveness=int(os.getenv("MY_DICTATION_VAD_AGGRESSIVENESS", vad.get("aggressiveness", 2))),
     )
     return cfg

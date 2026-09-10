@@ -1,12 +1,13 @@
 # my-dictation
 
-GroqまたはElevenLabs Scribeの1-best ASRを、限定的な日本語ITN、手動用語辞書（Mondegreen）、OpenAI互換LLMによる保守的校正へ通す、小さく監査可能なPython CLIです。各入力を音声と1 JSONの組で保存します。
+GroqまたはElevenLabs Scribeの1-best ASRを、VADによる音声区間の整理、限定的な日本語ITN、手動用語辞書（Mondegreen）、OpenAI互換LLMによる保守的校正へ通す、小さく監査可能なPython CLIです。各入力を音声と1 JSONの組で保存します。
 
 ## 必要環境
 
 - Python 3.11以上
 - 音声認識にはGroqまたはElevenLabs API key（既定はGroq）
 - LLM校正には任意のOpenAI互換API（未設定でも動作可能）
+- VADはPCM WAVなら追加依存なしのenergy VADで動作し、`webrtcvad-wheels`を入れるとWebRTC VADを利用可能
 
 ## 使い方
 
@@ -18,6 +19,8 @@ cd my-dictation
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -e .
+# WebRTC VADを使う場合（任意）
+pip install -e '.[vad]'
 cp config.example.toml config.toml
 ```
 
@@ -77,12 +80,14 @@ my-dictation transcribe recording.wav
 対応音声形式は選択したASR APIが受け付ける形式に従います。処理順は次の通りです。
 
 ```text
-選択したASR（Groq / ElevenLabs Scribe） → ITN → Mondegreen用語補正 → LLM校正 → 出力
+VAD（外側の無音を整理） → 選択したASR（Groq / ElevenLabs Scribe） → ITN → Mondegreen用語補正 → LLM校正 → 出力
 ```
 
 ASR providerは`config.toml`の`[api] asr_provider = "groq"`または`"elevenlabs"`でも選択できます。ElevenLabsは現行の`/v1/speech-to-text` multipart APIへ`xi-api-key`、`model_id`（既定`scribe_v1`）で接続します。API keyは履歴へ保存されません。
 
-音声は送信前に`data/spool/`へ一時コピーされます。ASRと履歴JSONの保存が成功すると、音声は削除せず`data/audio/YYYY-MM-DD/<record-id>.<extension>`へ移動して恒久保存されます。失敗した場合はspoolに残り、再試行できます。JSONの`audio_path`には`data`ディレクトリからの相対pathが入ります。
+音声は送信前に`data/spool/`へ一時コピーされ、PCM WAVの場合はそこでVADを実行します。VADは先頭・末尾だけを検出し、内部の無音（単語間の間）は残します。検出した発話の前後には既定300msのpaddingを残すため、語頭・語尾や呼吸を切り落としにくくしています。ASRと履歴JSONの保存が成功すると、VAD後の音声を`data/audio/YYYY-MM-DD/<record-id>.<extension>`へ移動して恒久保存します。これはファインチューニング時に無音の比率を下げるためです。元音声は別コピーとしては保存しないため、監査やVAD再調整で元音声が必要な場合は`[vad] enabled = false`で運用するか、入力側で原本を保管してください。失敗した場合は（VAD後の）spoolに残り、再試行できます。JSONの`audio_path`には`data`ディレクトリからの相対pathが入り、`vad`に実際のbackend・境界・適用結果が記録されます。
+
+VADはPCM WAV（8/16/24/32-bit、任意のチャンネル数・サンプルレート）を対象にします。WAV以外や圧縮WAVは安全のため変更せずASRへ渡します。WebRTC VADは8/16/32/48kHzの入力で使われ、それ以外は内蔵energy VADへfallbackします。WebRTCが未導入でも処理は止まらず、履歴の`vad.fallback_reason`に理由を記録します。
 
 複数ファイルをまとめて処理する場合は、batch scriptを使えます。CLIが生成する途中のstdoutは破棄され、保存された各JSONの最終文章とLLM状態だけがJSON配列としてstdoutへ出ます。
 
@@ -100,7 +105,25 @@ scripts/transcribe-files.sh --delay 8 --list audio-files.txt
 
 進捗とエラーはstderrへ出ます。個別の履歴JSONは従来どおり上書きせずに保存されます。
 
-### 4. 失敗した音声を再試行する
+### 4. VADを設定する
+
+`config.toml`の`[vad]`で境界検出を調整できます。
+
+```toml
+[vad]
+enabled = true
+backend = "webrtc"       # "webrtc", "energy", or "none"
+padding_ms = 300           # 発話の前後に残す文脈
+frame_ms = 30              # 10, 20, 30のいずれか
+min_speech_ms = 90         # 短いノイズを発話とみなさない下限
+aggressiveness = 2         # WebRTCのみ: 0（緩い）〜3（厳しい）
+```
+
+`backend = "webrtc"`が既定です。`pip install -e '.[vad]'`を実行しない場合は、依存のないenergy VADへ自動fallbackします。完全に無効化する場合は`enabled = false`または`MY_DICTATION_VAD_ENABLED=false`を指定します。細かな環境変数は`.env.example`を参照してください。
+
+VAD後の音声を学習用に保存する方針です。発話前後のpaddingを残した短い発話単位は一般にファインチューニング用として扱いやすい一方、誤検出の再確認に元音声が必要なら入力時点で原本を別途保存してください。
+
+### 5. 失敗した音声を再試行する
 
 spool内の全音声を再試行します。
 
@@ -117,7 +140,7 @@ my-dictation retry 'ファイル名またはIDの一部'
 
 再試行に成功した音声は`data/audio/`へ移動され、spoolには残りません。保存済み音声自体は削除されません。
 
-### 5. 用語辞書を設定する
+### 6. 用語辞書を設定する
 
 `config.toml`の`[terminology]`へ、正規表記と認識されやすい読みを追加します。
 
@@ -130,7 +153,7 @@ my-dictation retry 'ファイル名またはIDの一部'
 
 `config.toml`はGit管理対象外です。API keyは書かず、環境変数を使用してください。
 
-### 6. 履歴と正解テキスト
+### 7. 履歴と正解テキスト
 
 履歴は1入力につき1ファイルです。
 
@@ -144,11 +167,18 @@ JSONには`raw`、ITN・用語補正・LLM校正の各結果、最終`output`、
 {
   "audio_path": "audio/2026-09-10/<record-id>.wav",
   "output": "機械が出した文章",
-  "final": "自分で確認・修正した文章"
+  "final": "自分で確認・修正した文章",
+  "vad": {
+    "backend": "webrtc",
+    "applied": true,
+    "padding_ms": 300,
+    "start_ms": 120,
+    "end_ms": 1840
+  }
 }
 ```
 
-### 7. macOSでホットキー入力する
+### 8. macOSでホットキー入力する
 
 Hammerspoonを使う最小クライアントでは、`Ctrl + Option + Space`を1回押すと録音を開始し、もう1回押すと録音を停止します。文字起こしに成功すると結果をクリップボードへ入れ、録音停止時と同じウインドウが選択されたままなら自動でペーストします。別のウインドウへ移動していた場合は誤入力を避けるため、クリップボードへのコピーだけを行います。空または空白だけの結果はコピー／ペーストしません。
 
@@ -160,7 +190,7 @@ scripts/hotkey-transcribe.sh /path/to/recording.wav
 
 録音には`ffmpeg`、グローバルホットキーにはHammerspoonが必要です。初回使用時はmacOSの設定でHammerspoonのマイク入力とアクセシビリティを許可してください。録音デバイスとホットキーはHammerspoon設定側で変更できます。
 
-### 8. 実際のMondegreen / WeTextProcessingを使う（任意）
+### 9. 実際のMondegreen / WeTextProcessingを使う（任意）
 
 基本インストールでは軽量な内蔵処理を使います。外部実装を使う場合だけ追加します。
 
@@ -194,8 +224,9 @@ my-dictation --help
 
 - ITNは全角数字、および日付・時刻・金額・明示した単位を伴う数字だけを扱います。外部adapterでもspanを限定し、電話番号、住所、曖昧な助数詞は対象外です。
 - 用語補正は、内蔵matcherまたは実際のNagaYu/mondegreen connectorを明示選択します。いずれもLM rerankerを使わず、辞書自動更新もしません。
+- VADはPCM WAVの先頭・末尾だけをpadding付きで整理し、内部の無音は保持します。WAV以外・圧縮WAV・安全に発話を検出できない音声は原音のままです。
 - ゼロバイト音声や無信号のPCM WAVは送信前に拒否し、ASRが空文字または空白だけを返した場合もLLMへ渡さず失敗扱いにします。その場合、spool内の音声は再試行用に残ります。
-- ASR成功後は履歴JSONをatomicに保存してから、spoolの音声を`data/audio/`へatomicに移動します。移動に失敗してもspoolの音声は失われず、再試行できます。
+- ASR成功後は履歴JSONをatomicに保存してから、VAD後のspool音声を`data/audio/`へatomicに移動します。移動に失敗してもspoolの音声は失われず、再試行できます。
 - LLMには情報の削除・追加、要約・意訳、語順変更、一人称・口調・文体変更を禁止する構造化JSON promptを送ります。
 - 保護語の変更、数値を含む語や8文字以上の識別子の消失・並べ替え、一人称変更、句読点等を除く文章長の10%以上の増減を機械検出した場合、LLM候補を不採用にして用語補正後へfallbackします。不採用候補と理由は履歴JSONへ残ります。
 - `JSON L → JSONL`、`SQL Lite → SQLite`、文脈上明白な`Chrome → clone`など、短い技術語の局所修正は許可します。
@@ -211,6 +242,7 @@ PYTHONPATH=src python -m unittest discover -s tests -v
 
 ## PLAN.md 自己監査チェックリスト
 
+- [x] PCM WAVのVAD（WebRTC optional、energy fallback）とpadding付き外側トリミング
 - [x] Groq ASR adapter（provider responseを隔離、1-best、失敗理由）
 - [x] 送信前atomic spool、失敗時保持、明示retry
 - [x] ASR成功・履歴保存完了後に音声を`data/audio/`へ移動して恒久保存
@@ -218,7 +250,7 @@ PYTHONPATH=src python -m unittest discover -s tests -v
 - [x] NagaYu/mondegreen `load_glossary` / `ConstrainedCorrector` のLMなし隔離adapter（optional extra、保護語、内蔵fallback）
 - [x] vendor SDK非依存のOpenAI互換LLM、構造化出力、保守的prompt
 - [x] 保護語検証、違反・timeout・API失敗時fallback
-- [x] 各段階のinput/output/changeを含む1入力1 JSON
+- [x] 各段階のinput/output/changeとVAD境界を含む1入力1 JSON
 - [x] 一時file + fsync + renameによるatomic履歴保存
 - [x] `final` のatomic手動記録
 - [x] `transcribe` / `retry` / `process-text` CLIとstdout/stderr分離

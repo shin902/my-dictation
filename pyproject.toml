@@ -12,6 +12,9 @@ license = "MIT"
 dependencies = []
 
 [project.optional-dependencies]
+# WebRTC is optional; the default configuration falls back to the built-in
+# energy VAD when this extra is not installed.
+vad = ["webrtcvad-wheels>=2.0.14"]
 wetextprocessing = ["WeTextProcessing"]
 mondegreen = ["mondegreen @ git+https://github.com/NagaYu/mondegreen.git"]
 external-processors = [

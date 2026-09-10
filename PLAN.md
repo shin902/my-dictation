@@ -22,6 +22,7 @@
 - OpenAI互換APIによる保守的なLLM校正
 - Mondegreen修正語の保護
 - 各処理段階の履歴保存
+- VADによる発話区間の整理
 - 音声と確定テキストの恒久保存
 - 最小CLI
 
@@ -40,6 +41,8 @@
 音声
  ↓
 一時音声ファイルをspoolへ作成
+ ↓
+VAD（先頭・末尾の無音をpadding付きで整理）
  ↓
 Groq ASR（1-best）
  ├─ 失敗: spoolへ残してリトライ可能にする
@@ -105,9 +108,21 @@ data/
         └── <record-id>.<audio-extension>
 ```
 
-spoolとaudioは同じdataディレクトリ内に置き、成功時は`os.replace`相当のatomicな移動を行う。履歴保存に失敗した場合はspoolに音声を残し、恒久保存先への移動に失敗した場合もspoolから音声を失わない。成功した音声は削除せず、audioに保持する。
+spoolとaudioは同じdataディレクトリ内に置き、成功時は`os.replace`相当のatomicな移動を行う。履歴保存に失敗した場合はspoolに音声を残し、恒久保存先への移動に失敗した場合もspoolから音声を失わない。成功した音声（VAD対象ならトリミング後）は削除せず、audioに保持する。
 
-### 4.3 ITN
+### 4.3 VAD
+
+責務：
+
+- ASR前にPCM WAVの先頭・末尾にある非発話区間だけをトリミングする
+- 発話の前後にpaddingを残し、語頭・語尾や呼吸を保護する
+- VAD後の音声をASRへ渡し、同じ音声をファインチューニング候補としてarchiveへ保存する
+- 内部の単語間の無音は削除しない
+- 入力形式が対象外、または発話を安全に検出できない場合は原音を保持する
+
+既定backendはoptionalなWebRTC VADとし、未導入時・非対応サンプルレート時は内蔵energy VADへfallbackする。既定paddingは300ms、frameは30ms、最小発話長は90msとする。対象はPCM WAV（8/16/24/32-bit、任意チャンネル・サンプルレート）で、WAV以外や圧縮WAVは変更しない。VADのbackend、境界、適用結果はrecordの`vad`へ保存する。元音声は別archiveへ複製しないため、必要な場合は入力側で保管する。
+
+### 4.4 ITN
 
 責務：
 
@@ -118,7 +133,7 @@ spoolとaudioは同じdataディレクトリ内に置き、成功時は`os.repla
 
 電話番号、住所、曖昧な助数詞は初期対象外とする。
 
-### 4.4 Mondegreen
+### 4.5 Mondegreen
 
 責務：
 
@@ -128,7 +143,7 @@ spoolとaudioは同じdataディレクトリ内に置き、成功時は`os.repla
 
 初期は小さな手動辞書とし、LM rerankerは使用しない。
 
-### 4.5 LLM校正
+### 4.6 LLM校正
 
 責務：
 
@@ -149,7 +164,7 @@ OpenAI互換APIを使用し、特定vendorのSDKや独自レスポンスへ依�
 
 LLMへは本文と保護語を渡す。可能なら自由文ではなく、校正済み本文と変更一覧を構造化レスポンスとして要求する。
 
-### 4.6 保護語確認
+### 4.7 保護語確認
 
 責務：
 
@@ -162,7 +177,7 @@ LLMへは本文と保護語を渡す。可能なら自由文ではなく、校�
 2. 違反していればLLM段階を不採用
 3. Mondegreen段階のテキストをoutputとして使用
 
-### 4.7 履歴保存
+### 4.8 履歴保存
 
 1入力につき1つのJSONファイルを作る。
 
@@ -212,11 +227,19 @@ data/
   ],
   "output": "最終出力",
   "final": null,
-  "audio_path": "audio/YYYY-MM-DD/<record-id>.<audio-extension>"
+  "audio_path": "audio/YYYY-MM-DD/<record-id>.<audio-extension>",
+  "vad": {
+    "enabled": true,
+    "backend": "webrtc",
+    "applied": true,
+    "padding_ms": 300,
+    "start_ms": 120,
+    "end_ms": 1840
+  }
 }
 ```
 
-`audio_path`はdataディレクトリからの相対pathで、`process-text`では`null`とする。`final`はユーザーが確認して確定した教師テキストで、作成時は`null`。正しい出力なら`output`と同じ文を、修正した場合は修正文を記録する。
+`audio_path`はdataディレクトリからの相対pathで、`process-text`では`null`とする。`vad`にはASRとarchiveへ渡した音声の境界処理結果を記録し、`process-text`では`null`とする。`final`はユーザーが確認して確定した教師テキストで、作成時は`null`。正しい出力なら`output`と同じ文を、修正した場合は修正文を記録する。
 
 保存は一時ファイルへ書いた後にrenameし、途中終了で壊れたJSONを残さない。
 
@@ -248,14 +271,15 @@ my-dictation process-text <text>
 
 完了条件：ダミー処理を通した各段階がJSONへ保存される。
 
-### フェーズ2：Groq ASRとspool
+### フェーズ2：VADとGroq ASR/spool
 
-1. 音声spoolを実装する
-2. Groq adapterを実装する
-3. 成功時はaudioへ移動して保持し、失敗時はspoolに残す
-4. `transcribe`と`retry`を実装する
+1. PCM WAVのVADとpadding付き外側トリミングを実装する
+2. 音声spoolを実装する
+3. Groq adapterを実装する
+4. 成功時はVAD後のaudioを移動して保持し、失敗時はspoolに残す
+5. `transcribe`と`retry`を実装する
 
-完了条件：成功音声は`audio/`へ保持され、失敗音声はspoolから再試行でき、rawが記録される。
+完了条件：VAD後の成功音声は`audio/`へ保持され、失敗音声は（VAD後の状態で）spoolから再試行でき、rawが記録される。
 
 ### フェーズ3：ITN
 
@@ -296,10 +320,13 @@ my-dictation process-text <text>
 
 ## 7. 最低限の確認項目
 
-- ASR失敗時に音声が残る
+- VADが先頭・末尾だけをpadding付きでトリミングし、内部の無音を残す
+- VAD非対応形式・検出不能時に原音を保持する
+- ASR失敗時に（VAD後の）音声が残る
 - ASR成功後、記録保存前に音声を移動しない
 - 記録成功後に音声が`audio/`へ移動され、spoolから消える
 - 各段階の入力・出力がJSONに残る
+- VADのbackend・境界・適用結果がJSONに残る
 - JSON書き込みがatomicである
 - ITNが対象外の文字列を不用意に変更しない
 - Mondegreenが辞書外の一般語を不用意に変更しない

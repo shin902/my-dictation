@@ -1,5 +1,15 @@
 data_dir = "data"
 
+# Outer silence is trimmed before ASR and the trimmed recording is archived.
+# WebRTC uses the optional [vad] extra; without it, energy VAD is used.
+[vad]
+enabled = true
+backend = "webrtc"       # "webrtc", "energy", or "none"
+padding_ms = 300           # context kept before/after detected speech
+frame_ms = 30              # WebRTC-compatible frame size: 10, 20, or 30
+min_speech_ms = 90         # ignore shorter noise bursts
+aggressiveness = 2         # WebRTC mode, 0 (lenient) through 3 (aggressive)
+
 [api]
 # "groq" (default) or "elevenlabs"
 asr_provider = "groq"
