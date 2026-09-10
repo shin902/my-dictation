@@ -1,6 +1,6 @@
 # my-dictation
 
-GroqまたはElevenLabs Scribeの1-best ASRを、限定的な日本語ITN、手動用語辞書（Mondegreen）、OpenAI互換LLMによる保守的校正へ通す、小さく監査可能なPython CLIです。各入力を1 JSONに保存します。
+GroqまたはElevenLabs Scribeの1-best ASRを、限定的な日本語ITN、手動用語辞書（Mondegreen）、OpenAI互換LLMによる保守的校正へ通す、小さく監査可能なPython CLIです。各入力を音声と1 JSONの組で保存します。
 
 ## 必要環境
 
@@ -82,7 +82,7 @@ my-dictation transcribe recording.wav
 
 ASR providerは`config.toml`の`[api] asr_provider = "groq"`または`"elevenlabs"`でも選択できます。ElevenLabsは現行の`/v1/speech-to-text` multipart APIへ`xi-api-key`、`model_id`（既定`scribe_v1`）で接続します。API keyは履歴へ保存されません。
 
-音声は送信前に`data/spool/`へ一時コピーされます。ASRと履歴保存が成功すると削除され、失敗した場合だけ残ります。
+音声は送信前に`data/spool/`へ一時コピーされます。ASRと履歴JSONの保存が成功すると、音声は削除せず`data/audio/YYYY-MM-DD/<record-id>.<extension>`へ移動して恒久保存されます。失敗した場合はspoolに残り、再試行できます。JSONの`audio_path`には`data`ディレクトリからの相対pathが入ります。
 
 複数ファイルをまとめて処理する場合は、batch scriptを使えます。CLIが生成する途中のstdoutは破棄され、保存された各JSONの最終文章とLLM状態だけがJSON配列としてstdoutへ出ます。
 
@@ -115,7 +115,7 @@ find data/spool -type f
 my-dictation retry 'ファイル名またはIDの一部'
 ```
 
-再試行に成功した音声はspoolから削除されます。
+再試行に成功した音声は`data/audio/`へ移動され、spoolには残りません。保存済み音声自体は削除されません。
 
 ### 5. 用語辞書を設定する
 
@@ -130,7 +130,7 @@ my-dictation retry 'ファイル名またはIDの一部'
 
 `config.toml`はGit管理対象外です。API keyは書かず、環境変数を使用してください。
 
-### 6. 履歴と手動修正
+### 6. 履歴と正解テキスト
 
 履歴は1入力につき1ファイルです。
 
@@ -138,12 +138,13 @@ my-dictation retry 'ファイル名またはIDの一部'
 data/records/YYYY-MM-DD/HHMMSS-<uuid>.json
 ```
 
-JSONには`raw`、ITN・用語補正・LLM校正の各結果、最終`output`が入ります。結果が悪かった場合だけ、対象JSONの`manual_correction`へ修正文を手動で記入できます。
+JSONには`raw`、ITN・用語補正・LLM校正の各結果、最終`output`、音声への相対path `audio_path`が入ります。`process-text`で作ったrecordの`audio_path`は`null`です。`final`は人間が確認して確定した教師テキストで、作成時は`null`です。正しい出力を確認した場合は`output`と同じ文を、修正した場合は修正文を`final`へ記入します。
 
 ```json
 {
+  "audio_path": "audio/2026-09-10/<record-id>.wav",
   "output": "機械が出した文章",
-  "manual_correction": "自分で直した文章"
+  "final": "自分で確認・修正した文章"
 }
 ```
 
@@ -194,6 +195,7 @@ my-dictation --help
 - ITNは全角数字、および日付・時刻・金額・明示した単位を伴う数字だけを扱います。外部adapterでもspanを限定し、電話番号、住所、曖昧な助数詞は対象外です。
 - 用語補正は、内蔵matcherまたは実際のNagaYu/mondegreen connectorを明示選択します。いずれもLM rerankerを使わず、辞書自動更新もしません。
 - ゼロバイト音声や無信号のPCM WAVは送信前に拒否し、ASRが空文字または空白だけを返した場合もLLMへ渡さず失敗扱いにします。その場合、spool内の音声は再試行用に残ります。
+- ASR成功後は履歴JSONをatomicに保存してから、spoolの音声を`data/audio/`へatomicに移動します。移動に失敗してもspoolの音声は失われず、再試行できます。
 - LLMには情報の削除・追加、要約・意訳、語順変更、一人称・口調・文体変更を禁止する構造化JSON promptを送ります。
 - 保護語の変更、数値を含む語や8文字以上の識別子の消失・並べ替え、一人称変更、句読点等を除く文章長の10%以上の増減を機械検出した場合、LLM候補を不採用にして用語補正後へfallbackします。不採用候補と理由は履歴JSONへ残ります。
 - `JSON L → JSONL`、`SQL Lite → SQLite`、文脈上明白な`Chrome → clone`など、短い技術語の局所修正は許可します。
@@ -211,16 +213,16 @@ PYTHONPATH=src python -m unittest discover -s tests -v
 
 - [x] Groq ASR adapter（provider responseを隔離、1-best、失敗理由）
 - [x] 送信前atomic spool、失敗時保持、明示retry
-- [x] ASR成功・履歴保存完了後のみ音声削除
+- [x] ASR成功・履歴保存完了後に音声を`data/audio/`へ移動して恒久保存
 - [x] WeTextProcessing日本語APIの隔離adapter（optional extra、対象span限定、changes、内蔵fallback）
 - [x] NagaYu/mondegreen `load_glossary` / `ConstrainedCorrector` のLMなし隔離adapter（optional extra、保護語、内蔵fallback）
 - [x] vendor SDK非依存のOpenAI互換LLM、構造化出力、保守的prompt
 - [x] 保護語検証、違反・timeout・API失敗時fallback
 - [x] 各段階のinput/output/changeを含む1入力1 JSON
 - [x] 一時file + fsync + renameによるatomic履歴保存
-- [x] `manual_correction` のatomic手動記録
+- [x] `final` のatomic手動記録
 - [x] `transcribe` / `retry` / `process-text` CLIとstdout/stderr分離
 - [x] TOML + 環境変数設定（base URL/key/model/timeout/temperature/dictionary）
-- [x] key・音声を履歴JSONへ保存しない
+- [x] keyを履歴JSONへ保存せず、音声とJSONをrecord IDで紐付ける
 - [x] mockだけで成功/失敗/順序/fallback/atomic性を検証するtests
 - [x] 明示された初期scope外機能を追加しない

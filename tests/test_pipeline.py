@@ -131,7 +131,7 @@ class PipelineTests(unittest.TestCase):
         self.audio = self.root / "input.wav"; self.audio.write_bytes(b"RIFFmock")
     def tearDown(self): self.temp.cleanup()
 
-    def test_success_commits_record_then_removes_audio(self):
+    def test_success_commits_record_and_retains_audio_outside_spool(self):
         pipeline = Pipeline(self.settings, FakeAsr())
         output, path = pipeline.transcribe(self.audio)
         self.assertEqual(output, "2024-3-5 Kubernetes")
@@ -139,6 +139,13 @@ class PipelineTests(unittest.TestCase):
         record = json.loads(path.read_text())
         self.assertEqual(record["asr"]["raw"], "二千二十四年三月五日 クバネティス")
         self.assertEqual([s["name"] for s in record["stages"]], ["itn", "terminology", "llm"])
+        self.assertIsNone(record["final"])
+        self.assertNotIn("manual_correction", record)
+        self.assertFalse(Path(record["audio_path"]).is_absolute())
+        self.assertEqual(Path(record["audio_path"]).stem, record["id"])
+        archived = self.root / record["audio_path"]
+        self.assertEqual(archived.read_bytes(), self.audio.read_bytes())
+        self.assertEqual(archived.suffix, self.audio.suffix)
         self.assertNotIn("api_key", path.read_text())
 
     def test_asr_provider_and_model_are_recorded(self):
@@ -201,14 +208,47 @@ class PipelineTests(unittest.TestCase):
         with patch.object(pipeline.store, "save", side_effect=OSError("disk full")):
             with self.assertRaises(OSError): pipeline.retry_file(spooled)
         self.assertTrue(spooled.exists())
+        self.assertFalse(pipeline.audio.root.exists())
 
-    def test_atomic_record_and_manual_correction(self):
+    def test_audio_archive_failure_keeps_spool_and_retries_with_same_record_id(self):
+        pipeline = Pipeline(self.settings, FakeAsr())
+        spooled = pipeline.spool.put(self.audio)
+        with patch.object(pipeline.audio, "retain", side_effect=OSError("archive unavailable")):
+            with self.assertRaises(OSError): pipeline.retry_file(spooled)
+        first_record = next(pipeline.store.root.rglob("*.json"))
+        first = json.loads(first_record.read_text())
+        self.assertTrue(spooled.exists())
+        self.assertFalse((self.root / first["audio_path"]).exists())
+
+        _, second_record = pipeline.retry_file(spooled)
+        second = json.loads(second_record.read_text())
+        self.assertEqual(second_record, first_record)
+        self.assertEqual(second["id"], first["id"])
+        self.assertEqual((self.root / second["audio_path"]).read_bytes(), self.audio.read_bytes())
+        self.assertEqual(pipeline.spool.pending(), [])
+
+    def test_process_text_has_no_audio_path_and_final_is_unset(self):
+        pipeline = Pipeline(self.settings)
+        _, path = pipeline.process_text("テストです")
+        record = json.loads(path.read_text())
+        self.assertIsNone(record["audio_path"])
+        self.assertIsNone(record["final"])
+        self.assertNotIn("manual_correction", record)
+
+    def test_atomic_record_and_final(self):
         store = RecordStore(self.root)
-        record = {"id": "id", "created_at": "2024-01-02T03:04:05+00:00", "manual_correction": None}
+        record = {
+            "id": "id",
+            "created_at": "2024-01-02T03:04:05+00:00",
+            "final": None,
+            "manual_correction": "旧形式",
+        }
         path = store.save(record)
         self.assertFalse(any(p.suffix == ".tmp" for p in path.parent.iterdir()))
-        store.correct(path, "修正文")
-        self.assertEqual(json.loads(path.read_text())["manual_correction"], "修正文")
+        store.set_final(path, "正解文")
+        updated = json.loads(path.read_text())
+        self.assertEqual(updated["final"], "正解文")
+        self.assertNotIn("manual_correction", updated)
 
 
 if __name__ == "__main__": unittest.main()

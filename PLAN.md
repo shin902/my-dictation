@@ -22,7 +22,7 @@
 - OpenAI互換APIによる保守的なLLM校正
 - Mondegreen修正語の保護
 - 各処理段階の履歴保存
-- 不満のある結果への手動修正記録
+- 音声と確定テキストの恒久保存
 - 最小CLI
 
 ### 初期実装では扱わない
@@ -31,7 +31,6 @@
 - Adaptive GER
 - ユーザー確定文の自動追跡
 - 辞書の自動更新
-- 音声の恒久保存
 - 独立した検証モデル
 - Mac用GUI・常駐音声入力アプリ
 
@@ -44,7 +43,7 @@
  ↓
 Groq ASR（1-best）
  ├─ 失敗: spoolへ残してリトライ可能にする
- └─ 成功: rawを記録して音声を削除
+ └─ 成功: rawを記録し、履歴保存後に音声をarchiveへ移動
  ↓
 ITN
 数字・日付・時刻・金額・単位を限定的に正規化
@@ -91,19 +90,22 @@ transcribe(audio) -> AsrResult
 責務：
 
 - 録音・受領した音声を送信前に一時保存する
-- ASR成功後に削除する
-- ASR失敗時は残す
+- ASR失敗時はspoolに残す
+- ASR成功・履歴保存後に、spoolから恒久保存先へ移動する
 - 残った音声を明示的に再試行できるようにする
 
 想定構造：
 
 ```text
 data/
-└── spool/
-    └── <timestamp>-<id>.<audio-extension>
+├── spool/
+│   └── <timestamp>-<record-id>.<audio-extension>
+└── audio/
+    └── YYYY-MM-DD/
+        └── <record-id>.<audio-extension>
 ```
 
-プロセス異常終了時にも音声が失われないよう、ASR成功と記録保存の完了後に削除する。
+spoolとaudioは同じdataディレクトリ内に置き、成功時は`os.replace`相当のatomicな移動を行う。履歴保存に失敗した場合はspoolに音声を残し、恒久保存先への移動に失敗した場合もspoolから音声を失わない。成功した音声は削除せず、audioに保持する。
 
 ### 4.3 ITN
 
@@ -209,11 +211,12 @@ data/
     }
   ],
   "output": "最終出力",
-  "manual_correction": null
+  "final": null,
+  "audio_path": "audio/YYYY-MM-DD/<record-id>.<audio-extension>"
 }
 ```
 
-悪い結果だけ、ユーザーが`manual_correction`へ修正文を手動記録する。
+`audio_path`はdataディレクトリからの相対pathで、`process-text`では`null`とする。`final`はユーザーが確認して確定した教師テキストで、作成時は`null`。正しい出力なら`output`と同じ文を、修正した場合は修正文を記録する。
 
 保存は一時ファイルへ書いた後にrenameし、途中終了で壊れたJSONを残さない。
 
@@ -249,10 +252,10 @@ my-dictation process-text <text>
 
 1. 音声spoolを実装する
 2. Groq adapterを実装する
-3. 成功時削除、失敗時保持を実装する
+3. 成功時はaudioへ移動して保持し、失敗時はspoolに残す
 4. `transcribe`と`retry`を実装する
 
-完了条件：成功音声は削除され、失敗音声は再試行でき、rawが記録される。
+完了条件：成功音声は`audio/`へ保持され、失敗音声はspoolから再試行でき、rawが記録される。
 
 ### フェーズ3：ITN
 
@@ -285,24 +288,24 @@ my-dictation process-text <text>
 ### フェーズ6：実利用による調整
 
 1. 実際に使用する
-2. 悪い結果だけ`manual_correction`へ記録する
+2. 確定したテキストを`final`へ記録する
 3. どの段階で悪化したか履歴から確認する
 4. ITN規則、辞書、prompt、閾値を調整する
 
-自動辞書更新や専用モデル学習は、手動修正が十分に蓄積してから検討する。
+自動辞書更新や専用モデル学習は、`final`の確定テキストが十分に蓄積してから検討する。
 
 ## 7. 最低限の確認項目
 
 - ASR失敗時に音声が残る
-- ASR成功後、記録保存前に音声を削除しない
-- 記録成功後に音声が削除される
+- ASR成功後、記録保存前に音声を移動しない
+- 記録成功後に音声が`audio/`へ移動され、spoolから消える
 - 各段階の入力・出力がJSONに残る
 - JSON書き込みがatomicである
 - ITNが対象外の文字列を不用意に変更しない
 - Mondegreenが辞書外の一般語を不用意に変更しない
 - LLMが保護語を変更した場合にfallbackする
 - LLM API失敗時にも前段テキストを返す
-- API keyや音声を履歴JSONへ保存しない
+- API keyを履歴JSONへ保存せず、音声とJSONをrecord IDで紐付ける
 
 ## 8. 実装自己監査（外部processor）
 
